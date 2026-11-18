@@ -64,5 +64,8 @@ def run(elevated=False, modern=False, timing=None, restricted=True, shell='power
  finally:
   if p.poll() is None:p.kill()
 if len(sys.argv)>2: run(timing=sys.argv[2])
-else: run();run(True);run(modern=True);run(True,True);run(True,restricted=False);run(shell='bash');run(shell='bash',modern=True)
+else:
+ run();run(True);run(modern=True);run(True,True);run(True,restricted=False)
+ # The bash profile exists only on Linux: Windows always uses PowerShell and the bridge refuses PSBRIDGE_SHELL=bash there.
+ if os.name!='nt': run(shell='bash');run(shell='bash',modern=True)
 print(json.dumps(results,indent=2))
