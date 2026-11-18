@@ -1,0 +1,15 @@
+.git
+.github
+**/bin
+**/obj
+**/node_modules
+desktop/dist
+desktop/src-tauri/target
+app
+app-linux
+app-desktop
+screenshots
+Tests/Results
+*.log
+.env
+.env.*
