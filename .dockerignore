@@ -13,3 +13,15 @@ Tests/Results
 *.log
 .env
 .env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.ppk
+hosts.json
+config.json
+tunnel.yaml
+tunnel.yml
+*credentials*.json
+*secrets*.json
+*token*.json

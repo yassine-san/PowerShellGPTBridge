@@ -10,6 +10,7 @@ ARG UBUNTU_IMAGE=ubuntu:24.04
 
 # ---------------------------------------------------------------- toolchain
 FROM ${UBUNTU_IMAGE} AS toolchain
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG DOTNET_SDK_VERSION=8.0.428
 ARG NODE_VERSION=22.14.0
 ARG RUST_VERSION=1.94.1
@@ -55,6 +56,7 @@ RUN --mount=type=cache,target=/home/tester/.nuget/packages,uid=1001 bash docker/
 
 # ---------------------------------------------------------------- runtime
 FROM ${UBUNTU_IMAGE} AS runtime
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG APP_UID=1000
 ARG APP_GID=1000
 ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 DOTNET_ROOT=/usr/share/dotnet DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
@@ -67,7 +69,7 @@ COPY --from=toolchain /usr/share/dotnet/host /usr/share/dotnet/host
 COPY --from=toolchain /usr/share/dotnet/shared /usr/share/dotnet/shared
 RUN ln -s /usr/share/dotnet/dotnet /usr/bin/dotnet \
     && (userdel -r ubuntu 2>/dev/null || true) \
-    && groupadd -g "${APP_GID}" psbridge && useradd -m -u "${APP_UID}" -g "${APP_GID}" -s /bin/bash psbridge \
+    && groupadd -o -g "${APP_GID}" psbridge && useradd -m -o -u "${APP_UID}" -g "${APP_GID}" -s /bin/bash psbridge \
     && install -d -o psbridge -g psbridge -m 0700 "/run/user/${APP_UID}" /home/psbridge/.local /home/psbridge/.local/state
 COPY --from=build --chown=root:root /src/app-linux /opt/psbridge/app-linux
 COPY --chown=root:root Start-Linux.sh /opt/psbridge/Start-Linux.sh
