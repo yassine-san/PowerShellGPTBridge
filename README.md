@@ -1,59 +1,118 @@
-# PersistentPowerShellBridge 0.3
+# PowerShellGPTBridge
 
-Windows x64 operator interface for the existing supervised PowerShell and SSH tools. The ZIP includes a framework-dependent build in app, complete source in Bridge, and executable tests. The Windows GUI, live SSH endpoint and ordinary ChatGPT round trip require local acceptance. See ACCEPTANCE.md.
+**Human-supervised PowerShell and SSH execution from ChatGPT.**
 
-## Side-by-side installation and rollback
+PowerShellGPTBridge connects ChatGPT to a Windows computer through an MCP bridge and OpenAI Secure MCP Tunnel. ChatGPT can request PowerShell commands and SSH/SFTP operations; a local approval window shows the exact operation before execution.
 
-1. Extract the complete ZIP into a new directory on your PC. Leave the working 0.2 directory intact.
-2. In PowerShell 7, from the extracted 0.3 directory, back up the actual deployed 0.2 files. Substitute your existing directory.
+> **Status:** Experimental | **Published source:** v0.3 | **Platform:** Windows x64 | **License:** MIT
+>
+> The published v0.3 interface uses WinForms. The Tauri/React redesign is planned, not released.
 
-~~~powershell
-.\Backup-Bridge.ps1 -ExistingProject 'C:\path\to\your\existing\PersistentPowerShellBridge'
+## How it works
+
+```text
+ChatGPT conversation
+        |
+        v
+OpenAI Secure MCP Tunnel
+        |
+        v
+PowerShellGPTBridge (.NET 8, Windows)
+        |
+        +-- Local approval: Approve once / Reject / Stop task
+        |                                      |
+        |                                   Reject? Stop.
+        v
+Approved operation only
+        |
+        +-- Persistent local PowerShell 7
+        +-- Remote SSH / SFTP
+        |
+        v
+Execution result + operation history
+        |
+        v
+ChatGPT
+```
+
+The bridge enforces approval. The AI's explanation is not authorization, and approval of one command never authorizes another.
+
+## Current capabilities (v0.3)
+
+- **Mandatory local approval:** Preview the exact command and target, approve once, reject with feedback, or stop the task. The approval deadline is **60 seconds**; expiration does not execute the operation.
+- **Persistent PowerShell session:** Variables and functions can survive separate approved calls.
+- **SSH/SFTP:** Connect to remote servers, execute commands, and transfer files with supervised decisions. SSH credentials remain local.
+- **Operation history:** Search by request, status or target, inspect available output and timing, and retain specifically reviewed transcript fields using Windows user-scoped encryption.
+- **Limited verified changes:** A successful SFTP download can verify local file creation and optionally provide a small text diff. General commands do **not** receive comprehensive side-effect verification.
+- **Session controls:** Stop Task, Start New Task, Reset Session, and Disconnect.
+
+**Classification:** The pinned `Get-Date` operation is READ (green); general PowerShell scripts and SSH operations default to WRITE (red). Classification and privilege level are separate.
+
+## Installation and local test
+
+This repository contains **source code**, not the compiled `app/` binaries. Requirements:
+
+- Windows x64 with an interactive desktop
+- .NET 8 SDK for building and .NET 8 Windows Desktop Runtime for the framework-dependent application
+- PowerShell 7
+- OpenAI Secure MCP Tunnel client and a configured MCP connection for live ChatGPT operation
+
+From PowerShell 7 in the project root:
+
+```powershell
+.\Build.ps1
 .\Test-Local.ps1
-~~~
+```
 
-The backup script copies source, binaries and launch scripts into a fresh sibling directory, then verifies every copied file by SHA-256. Credentials and audit data under LocalAppData are outside its scope. The UI test needs an interactive Windows desktop and the x64 .NET 8 Windows Desktop Runtime. A local test never runs the command.
+The UI test opens a simulated approval request without executing its sample command. The build writes the Windows application to `app/`. If script execution is blocked, review the scripts before applying a process-scoped execution-policy override.
 
-3. Disconnect 0.2 when ready to switch. From the 0.3 folder, use your existing tunnel ID, official tunnel client and restricted runtime key. Keep your existing ChatGPT plugin and OAuth configuration.
+Once the tunnel and plugin are configured, the existing launcher uses:
 
-~~~powershell
+```powershell
 .\Start-Bridge.ps1 -TunnelId $TunnelId -TunnelClient $TunnelClient
-~~~
+```
 
-4. In the ordinary ChatGPT conversation, select the same plugin and request Get-Date. The tunnel readiness label reports the client's health socket. A successful tool call with a matching request ID verifies the conversation path.
+Keep tunnel secrets and credentials out of source control. For full deployment and rollback instructions, see the [v0.3 technical guide](docs/README-v0.3.md) and [acceptance procedure](ACCEPTANCE.md).
 
-To roll back, disconnect 0.3 and run Start-Bridge.ps1 from your untouched 0.2 folder or verified backup with the same arguments. Switching bridge processes ends transient PowerShell and SSH sessions. The launcher does not change UAC. The new operation-* files coexist with the existing credential and audit files. A reset is destructive to runspace variables and functions.
+## Security model and limitations
 
-## Approval and supervision
+**This application can execute arbitrary commands and must be treated as a privileged automation interface.**
 
-The popup uses the foreground window's monitor and its working area. It accounts for the complete outer rectangle. The entrance lasts up to 210 ms and uses the Windows client-area animation setting. A topmost, independent tool window can appear while the manager is minimized. Click it or select it with Alt+Tab for keyboard interaction. Escape or Ctrl+R rejects, Ctrl+Enter approves once, and Ctrl+Shift+F12 stops the task. Closing rejects. All three actions operate on the displayed immutable request.
+- Every operation requires explicit local approval, tied to the displayed command and target.
+- Examine the complete command, host, execution identity, privilege level, and expected effects. AI-provided impact descriptions are **unverified predictions**.
+- If launched with administrator privileges, approved general commands may also execute elevated. UAC-disabled environments warrant extra caution.
+- Never commit SSH private keys, passwords, tunnel configuration, audit transcripts, or operation-history files.
+- Execution timeouts and connection failures can leave effects behind. Check the target before retrying.
+- v0.3 has synchronous execution (up to 60 seconds per operation), no detached long-running jobs or live stdout streaming, and no general filesystem change tracking.
+- Windows GUI and live SSH/ChatGPT behavior need acceptance testing on the deployment machine.
 
-Green identifies the exact Get-Date route that invokes a pinned cmdlet. General scripts and SSH operations are red. Privilege is displayed independently. An elevated general-mode supervisor executes ordinary approved local commands as Administrator, including when UAC is disabled. This mirrors the reported deployed configuration. To explicitly restrict an elevated launch to Get-Date, use -AllowElevatedGetDate. Remote privilege may be unknown. A model-supplied purpose or expected effect is unverified.
+## Repository structure
 
-Copy uses the original submitted text. Expand enlarges the command area. The countdown uses the same monotonic starting timestamp as the approval gate. Expiry prevents dispatch. A partially typed explanation is returned in incomplete_feedback when the request channel is available. A deliberate rejection uses reason. A first-use SSH host-key prompt is a second decision with its own ID. Host decisions that block authentication are returned in host_approval.
+```text
+Bridge/               .NET/C# execution, approval, SSH, manager source
+Tests/                Core, protocol, and supervision test sources
+docs/README-v0.3.md   Original detailed operational README
+ACCEPTANCE.md         Windows GUI and MCP acceptance checklist
+Build.ps1             Build/publish
+Start-Bridge.ps1      Launcher
+Test-Local.ps1        UI-only test
+hosts.example.json    Placeholder SSH host metadata
+LICENSE               MIT
+```
 
-## Operation history
+## Roadmap (not yet released)
 
-The manager groups information by request ID and shows the current task and session IDs. Select a history entry or search by operation title, target, task ID, request ID, status or classification. The Summary, Changes, Output and Details tabs show the corresponding record. Stop task cancels the active task and blocks new operations on it. Start new task opens a new task scope. Reset session recreates the local worker state. Minimize leaves the connection running. Disconnect terminates the bridge.
+- Tauri 2 / React / TypeScript visual redesign with performance measurements
+- Better verified change evidence and diffs
+- Supervised long-running jobs with status and cancellation
+- Possible Linux support after platform-specific approval and execution work
 
-The supervisor writes one atomically replaced operation snapshot per request under the existing SID-protected %LOCALAPPDATA%\PersistentPSBridge directory. Metadata includes identity, target, classification, approval, timestamps, duration, result and truncation. Startup removes history files older than 30 days. An operation interrupted after dispatch began is displayed as result_unknown. The existing JSONL audit remains separate and has its existing operator-managed retention.
+The existing WinForms manager and approval popup do **not** represent the proposed final visual design. Screenshots have not yet been published.
 
-The latest 128 completed operations have full live transcripts. Original command, model explanations, paths, free-form output, error text, diffs and reasons can contain secrets. Automatic snapshots omit these free-form fields. Use **Keep reviewed details** on a completed entry to retain selected fields for later restarts. Review their complete contents first and leave any field containing a credential unchecked. Selected fields are encrypted using Windows DPAPI for the current user. Selecting no fields and confirming deletes that operation's reviewed copy. DPAPI does not protect against another process acting as that user. Credential dialogs never populate the ledger. The launcher accepts the legacy log switches; arbitrary audit command text and reasons are always hashed in 0.3.
+## Development and licensing
 
-For a successful download, the manager can verify creation of the local destination because the transfer uses exclusive CreateNew. Select the diff checkbox before approval to preview text actually written during that transfer. It is off by default. The diff is live only, limited to 8 KiB of valid UTF-8 text, and normalizes line endings for display. Larger or binary content retains the creation evidence. There is no filesystem scan, reread, or general-purpose snapshot. Other effects are labeled unverified. A timeout can leave partial files or remote side effects. Inspect the target before considering a retry.
+Read [DEPENDENCIES.md](DEPENDENCIES.md) and [THIRD-PARTY.txt](THIRD-PARTY.txt) for third-party notices. Original project code is available under the [MIT License](LICENSE); third-party components retain their own terms.
 
-## Timing and long-running work
+Pull requests and issues are welcome. Do not post credentials or sensitive command output in public bug reports.
 
-The approval deadline is 60 seconds. Execution keeps its separate 1–60 second synchronous request parameter. The local request budget is 105 seconds from handling the call. A credential prompt can consume that budget. The bridge declines opening a confirmation if a full decision window cannot fit; it declines execution after approval when the requested execution interval no longer fits. Startup, IO and external cancellation can still interrupt work. SSH network handshaking uses up to 15 seconds, bounded by the requested execution timeout; the first-use human host-key check pauses that local network timer.
-
-OpenAI documents a single 120-second deadline from hosted queue admission to final response delivery. Queue time is invisible locally and progress notifications do not renew it. The application cannot guarantee delivery of a terminal response. The local ledger and the target are the places to check an uncertain result. There is no automatic retry. Source: https://developers.openai.com/api/docs/guides/secure-mcp-tunnels
-
-The manager shows elapsed time, target, configured timeout, and current state during a synchronous operation. The current worker and SSH implementation deliver captured streams at completion; there is no live stdout feed. Stop task is the cancellation control. Remote process termination and reversal of changes cannot be guaranteed. Multi-minute detached builds, transfers, backups, operation polling and streaming output are a separate milestone. This release starts no detached operation and changes neither MCP tool signature.
-
-## Build and diagnostics
-
-Run .\Build.ps1 with the .NET 8 SDK installed. Once the locked NuGet dependencies have been restored for win-x64, use .\Build.ps1 -NoRestore. Publish copies the PowerShell module directory into app\Modules. Launch the whole app directory together. Build.ps1 prints the Bridge.dll hash. The apphost alone does not identify a build.
-
-If no approval appears, inspect launcher stderr for the executable, assembly, session, privilege and desktop check. An unhealthy local session requires a deliberate local Reset session; Stop task also requires starting a new task before execution. If the tunnel is unavailable, check the existing tunnel-client process and its readiness. If the MCP response is missing after a timeout, inspect the manager entry for the request before considering another action. Direct production Bridge.exe startup requires its tunnel parent; use --ui-test for an independent GUI check.
-
-This candidate was built from the available 0.2 project and the reported general-mode and module-copy changes. A call to back up and compare the actual Windows installation returned session_unhealthy before execution. The remote installation was not modified or backed up by that call.
+**Independent project — not an official OpenAI application.**
