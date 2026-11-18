@@ -1,5 +1,7 @@
 # PowerShellGPTBridge
 
+**[Complete installation guide (Windows + Ubuntu)](docs/INSTALLATION.md)** — tunnel, restricted API key, plugin, prerequisites and validation.
+
 Run an approved PowerShell command from a ChatGPT conversation, inspect the result there, and keep the same local PowerShell session for the next request. Each local command, SSH operation and SFTP transfer requires a fresh decision on the operator’s desktop.
 
 **Status:** experimental. Windows 0.3 is the published WinForms baseline. This review candidate adds a Tauri 2 / React supervisor and an Ubuntu x64 backend. Live desktop and tunnel acceptance remains outstanding. The required .NET 8 and PowerShell 7.4 runtime lines reached upstream end of support on November 10, 2026.
