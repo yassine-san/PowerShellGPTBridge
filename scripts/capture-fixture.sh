@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# xdotool cannot match window titles (even ASCII ones) when no locale is set, and ours contain a bullet.
+export LANG=C.UTF-8
 mkdir -p screenshots
 app-linux/bridge-supervisor --fixture &
 pid=$!
