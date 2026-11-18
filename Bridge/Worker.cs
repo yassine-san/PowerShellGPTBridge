@@ -13,6 +13,15 @@ internal static class Worker
     }
     private static async Task<int> Run(string[] args)
     {
+#if LINUX_HOST
+        if (args.Length!=2 || args[0]!="--worker" || !int.TryParse(args[1],out int creator) || !LinuxOS.PrepareWorker(creator)) return 1;
+        using var creatorProcess=Process.GetProcessById(creator);
+        if (creatorProcess.MainModule?.FileName!=Environment.ProcessPath) return 1;
+        using var input=LinuxOS.TakeProtocolStream(0, FileAccess.Read);
+        using var output=LinuxOS.TakeProtocolStream(1, FileAccess.Write);
+        await Wire.Send(output,new WorkerHello(IdentityInfo.Name,IdentityInfo.Privilege,Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)),CancellationToken.None);
+        return await RunSession(input,output);
+#else
         if (args.Length != 3) return 1;
         using var parent = Process.GetProcessById(int.Parse(args[2]));
         if (!string.Equals(parent.MainModule?.FileName, Environment.ProcessPath, StringComparison.OrdinalIgnoreCase)) return 1;
@@ -32,13 +41,18 @@ internal static class Worker
             var result = await worker.Run(request.Command, request.Seconds, cancelled.Token);
             await Wire.Send(pipe, result, CancellationToken.None); return 0;
         }
+        return await RunSession(pipe,pipe);
+#endif
+    }
+    private static async Task<int> RunSession(Stream input, Stream output)
+    {
         using var space = RunspaceFactory.CreateRunspace(InitialSessionState.CreateDefault2()); space.Open();
         space.SessionStateProxy.Path.SetLocation(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
         while (true) {
-            var request = await Wire.Read<WorkerRequest>(pipe, CancellationToken.None);
+            var request = await Wire.Read<WorkerRequest>(input, CancellationToken.None);
             if (request.Command.Length > 32768 || request.Seconds is < 1 or > 60) return 1;
             var result = await Execute(space, request.Command);
-            await Wire.Send(pipe, result, CancellationToken.None);
+            await Wire.Send(output, result, CancellationToken.None);
         }
     }
     internal static async Task<Execution> Execute(Runspace space, string command)

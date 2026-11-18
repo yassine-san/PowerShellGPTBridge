@@ -4,8 +4,11 @@ await endpoint.Serve();
 namespace PersistentBridge {
 internal static class IdentityInfo { public static bool Elevated => Environment.GetEnvironmentVariable("TEST_ELEVATED") == "1"; public static string Name => "test-user"; public static string Privilege => Elevated ? "ELEVATED — ADMINISTRATOR" : "STANDARD USER"; }
 internal class Control { public string Text { get; set; } = ""; public event EventHandler? Click; public void Invoke() => Click?.Invoke(this,EventArgs.Empty); }
-internal class Window {
- public Control State = new(), NewTask = new(); public event Action? TaskStopped;
+internal class Window : IOperatorView {
+ public event Action? NewTaskRequested; public void SetState(string value) {} public void Notify(string text) {}
+ public Control State = new(), NewTask = new(); public Task<Credential?> RequestCredential(string target,bool sudo,CancellationToken token) =>
+        CredentialStore.Prompt(this,target,token,sudo);
+    public event Action? TaskStopped;
  public void Record(HistoryEntry entry) { }
  public async Task<Decision> Approve(Operation op, CancellationToken token, long start = 0) { await Task.Delay(100,token);
  Console.Error.WriteLine("APPROVAL:"+op.Command);
@@ -28,7 +31,7 @@ internal sealed class Session(bool elevated=false) : IDisposable {
 }
 internal record Credential(string Username,string Secret);
 internal static class CredentialStore { public static Task<Credential?> Prompt(Window w,string t,CancellationToken c,bool sudo=false)=>Task.FromResult<Credential?>(null); }
-internal sealed class SshSessions(Window w,Audit a) : IDisposable {
+internal sealed class SshSessions(IOperatorView w,Audit a) : IDisposable {
  public string Key(string h,int p)=>h+":"+p; public string Identity(string k)=>"remote-test"; public bool Connected(string k)=>false; public Guid Id(string k)=>Guid.Empty;
  public Task<Credential?> Credential(string k,CancellationToken c)=>Task.FromResult<Credential?>(null);
  public Task Connect(string h,int p,Credential c,Guid id,Guid taskId,System.Diagnostics.Stopwatch budget,int seconds,CancellationToken ct)=>throw new NotSupportedException();

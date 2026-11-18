@@ -33,6 +33,7 @@ internal sealed class History(string root)
     // Only explicitly reviewed fields may be retained. The credential store and raw diff never enter this path.
     public void KeepReviewed(HistoryEntry entry, HashSet<int> selected)
     {
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("Reviewed transcript persistence requires Windows DPAPI.");
         var safe = ForDisk(entry);
         var op = safe.Op with {
             Command = selected.Contains(0) ? entry.Op.Command : safe.Op.Command,
@@ -56,7 +57,7 @@ internal sealed class History(string root)
 
     static HistoryEntry ReadReviewed(string file, HistoryEntry fallback)
     {
-        if (!File.Exists(file) || (File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0) return fallback;
+        if (!OperatingSystem.IsWindows() || !File.Exists(file) || (File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0) return fallback;
         try {
             byte[] bytes = ProtectedData.Unprotect(File.ReadAllBytes(file),fallback.Op.Id.ToByteArray(),DataProtectionScope.CurrentUser);
             try { return JsonSerializer.Deserialize<HistoryEntry>(bytes) ?? fallback; }

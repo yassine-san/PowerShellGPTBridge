@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><AssemblyName>Bridge</AssemblyName><TargetFramework>net8.0-windows</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting><UseWindowsForms>true</UseWindowsForms>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier><DefineConstants>$(DefineConstants);TAURI_DESKTOP</DefineConstants>
+    <Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings><SelfContained>false</SelfContained><RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../Supervisor/*.cs;../Bridge/*.cs" Exclude="../Bridge/ApprovalForm.cs;../Bridge/Program.cs;../Bridge/Window.cs;../Bridge/TunnelStatus.cs;../Bridge/Style.cs"/>
+    <PackageReference Include="Microsoft.PowerShell.SDK" Version="7.4.22"/>
+    <PackageReference Include="ModelContextProtocol.Core" Version="2.4.0"/>
+    <PackageReference Include="SSH.NET" Version="2026.0.1"/>
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0"/>
+  </ItemGroup>
+</Project>

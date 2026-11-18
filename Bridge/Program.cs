@@ -41,6 +41,9 @@ internal static class Program
             Console.Error.WriteLine($"runtime={Environment.Version} session={Process.GetCurrentProcess().SessionId} admin={elevated} environmentInteractive={Environment.UserInteractive} formsInteractive={SystemInformation.UserInteractive} stdinRedirected={Console.IsInputRedirected} stdoutRedirected={Console.IsOutputRedirected}");
             var localTest = args.SequenceEqual(new[] { "--ui-test" });
             if (args.Length != 0 && !localTest) throw new ArgumentException("Only --ui-test is supported.");
+            if (!localTest && elevated && Environment.GetEnvironmentVariable("PSBRIDGE_ALLOW_ELEVATED_GET_DATE") != "1"
+                && Environment.GetEnvironmentVariable("PSBRIDGE_ALLOW_ELEVATED_GENERAL") != "1")
+                throw new InvalidOperationException("Use a standard account or explicitly select the elevated launch mode.");
             stage = "desktop";
             DesktopAccess.Check();
             if (localTest)

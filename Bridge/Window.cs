@@ -3,11 +3,16 @@ using System.Text.Json;
 
 namespace PersistentBridge;
 
-internal sealed class Window : Form
+internal sealed class Window : Form, IOperatorView
 {
     public readonly Label State = Style.Label(""), Transport = Style.Label("Checking tunnel client…");
     public readonly Button Reset = Style.Button("Reset session"), StopTask = Style.Button("Stop task", Style.Red), NewTask = Style.Button("Start new task");
+    public Task<Credential?> RequestCredential(string target,bool sudo,CancellationToken token) =>
+        CredentialStore.Prompt(this,target,token,sudo);
     public event Action? TaskStopped;
+    public event Action? NewTaskRequested;
+    public void Notify(string text) => MessageBox.Show(this,text);
+    public void SetState(string text) => State.Text = text;
     readonly Dictionary<Guid, HistoryEntry> entries = new();
     readonly Queue<Guid> liveTranscripts = new();
     readonly ListBox history = new() { Dock = DockStyle.Fill, IntegralHeight = false, HorizontalScrollbar = true, BorderStyle = BorderStyle.None,
@@ -22,6 +27,7 @@ internal sealed class Window : Form
 
     public Window(string? root = null)
     {
+        NewTask.Click += (_, _) => NewTaskRequested?.Invoke();
         Style.Theme(this); Text = "Persistent PowerShell Bridge  ·  Operations"; Size = new(1120, 720);
         if (root != null) {
             store = new(root); placement = Path.Combine(root, "manager-bounds.json");

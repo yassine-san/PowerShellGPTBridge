@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
+    <DefineConstants Condition="$([MSBuild]::IsOSPlatform('Linux'))">$(DefineConstants);LINUX_HOST</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../Bridge/Worker.cs;../../Bridge/Wire.cs;../../Bridge/Operation.cs"/>
+    <Compile Condition="$([MSBuild]::IsOSPlatform('Linux'))" Include="../../Linux/Session.cs;../../Linux/LinuxOS.cs"/>
+    <Compile Condition="$([MSBuild]::IsOSPlatform('Windows'))" Include="../../Bridge/Session.cs;../../Bridge/Job.cs;../../Bridge/IdentityInfo.cs"/>
+    <PackageReference Include="Microsoft.PowerShell.SDK" Version="7.4.22"/>
+  </ItemGroup>
+</Project>

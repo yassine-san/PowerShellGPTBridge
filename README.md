@@ -1,118 +1,50 @@
 # PowerShellGPTBridge
 
-**Human-supervised PowerShell and SSH execution from ChatGPT.**
+Run an approved PowerShell command from a ChatGPT conversation, inspect the result there, and keep the same local PowerShell session for the next request. Each local command, SSH operation and SFTP transfer requires a fresh decision on the operator’s desktop.
 
-PowerShellGPTBridge connects ChatGPT to a Windows computer through an MCP bridge and OpenAI Secure MCP Tunnel. ChatGPT can request PowerShell commands and SSH/SFTP operations; a local approval window shows the exact operation before execution.
+**Status:** experimental. Windows 0.3 is the published WinForms baseline. This review candidate adds a Tauri 2 / React supervisor and an Ubuntu x64 backend. Live desktop and tunnel acceptance remains outstanding. The required .NET 8 and PowerShell 7.4 runtime lines reached upstream end of support on November 10, 2026.
 
-> **Status:** Experimental | **Published source:** v0.3 | **Platform:** Windows x64 | **License:** MIT
->
-> The published v0.3 interface uses WinForms. The Tauri/React redesign is planned, not released.
+~~~mermaid
+flowchart TD
+  C["ChatGPT conversation"] <--> T["OpenAI Secure MCP Tunnel"]
+  T <--> B["Local .NET MCP bridge"]
+  B <--> U["Operator approves or rejects"]
+  B -->|Approved local script| P["Persistent PowerShell worker"]
+  B -->|Approved remote operation| S["Pinned SSH or SFTP host"]
+  P --> B
+  S --> B
+~~~
 
-## How it works
+## Start here
 
-```text
-ChatGPT conversation
-        |
-        v
-OpenAI Secure MCP Tunnel
-        |
-        v
-PowerShellGPTBridge (.NET 8, Windows)
-        |
-        +-- Local approval: Approve once / Reject / Stop task
-        |                                      |
-        |                                   Reject? Stop.
-        v
-Approved operation only
-        |
-        +-- Persistent local PowerShell 7
-        +-- Remote SSH / SFTP
-        |
-        v
-Execution result + operation history
-        |
-        v
-ChatGPT
-```
+| Platform | Launch from the extracted candidate folder | Build and prerequisites |
+|---|---|---|
+| Windows x64 | In PowerShell 7, run `.\Start-Bridge.ps1 -Desktop -TunnelId $TunnelId -TunnelClient $TunnelClient` | [Setup guide](docs/SETUP.md) |
+| Ubuntu 24.04 LTS x64 desktop | Run `./Start-Linux.sh "$TUNNEL_ID" "$TUNNEL_CLIENT"` | [Linux guide](docs/LINUX.md) |
 
-The bridge enforces approval. The AI's explanation is not authorization, and approval of one command never authorizes another.
+Use a standard desktop account. Install the x64 .NET 8 runtime, Windows Desktop Runtime on Windows, and the official tunnel client. The Tauri frontend uses WebView2 on Windows and WebKitGTK 4.1 on Linux. An extracted binary distribution needs no Rust, Node or Visual C++ compiler on the operator’s laptop. A source checkout requires a separate build step.
 
-## Current capabilities (v0.3)
+In Platform, create a Secure MCP Tunnel associated with the intended ChatGPT workspace. Use an organization role with **Tunnels Read + Manage** for provisioning. Give the restricted runtime key **Tunnels Read + Use**. Enter that key locally in the launcher. In ChatGPT, choose **Plugins → Add custom MCP server → Connection → Tunnel**, select the tunnel, configure the authentication requested for the workspace, and enable the plugin in the conversation. Existing users can reuse their tunnel and plugin. Write-capable tool availability depends on account and workspace policy. [Detailed setup and troubleshooting](docs/SETUP.md)
 
-- **Mandatory local approval:** Preview the exact command and target, approve once, reject with feedback, or stop the task. The approval deadline is **60 seconds**; expiration does not execute the operation.
-- **Persistent PowerShell session:** Variables and functions can survive separate approved calls.
-- **SSH/SFTP:** Connect to remote servers, execute commands, and transfer files with supervised decisions. SSH credentials remain local.
-- **Operation history:** Search by request, status or target, inspect available output and timing, and retain specifically reviewed transcript fields using Windows user-scoped encryption.
-- **Limited verified changes:** A successful SFTP download can verify local file creation and optionally provide a small text diff. General commands do **not** receive comprehensive side-effect verification.
-- **Session controls:** Stop Task, Start New Task, Reset Session, and Disconnect.
+Ask ChatGPT to **run the exact command Get-Date with the bridge**. Inspect the request ID, machine and identity, then choose Approve once. Match the result to the local history entry. Rejecting with a reason returns feedback without dispatch.
 
-**Classification:** The pinned `Get-Date` operation is READ (green); general PowerShell scripts and SSH operations default to WRITE (red). Classification and privilege level are separate.
+## Capabilities
 
-## Installation and local test
+- Persistent PowerShell variables, functions and working directory. Reset discards session state.
+- Two write-capable MCP tools, `execute_powershell` and `ssh_operation`. The local READ indicator is reserved for the pinned date cmdlet.
+- SSH connection, execution, explicit remote sudo, disconnect and no-overwrite transfers. Connect first, inspect first-use host fingerprints independently, and reject unexpected changes.
+- A 60-second approval deadline and separate bounded synchronous execution timeouts. Stop Task blocks subsequent calls for the stopped task. A remote timeout can leave changes behind.
+- Searchable operation history, decision feedback, output, errors and observed change evidence. A successful SFTP download can produce an optional bounded diff of the newly created file. Arbitrary commands have unverified side effects.
+- Tauri communicates with the backend through private inherited process streams. The MCP stream is separate. No new TCP control listener.
 
-This repository contains **source code**, not the compiled `app/` binaries. Requirements:
+## Review the interface
 
-- Windows x64 with an interactive desktop
-- .NET 8 SDK for building and .NET 8 Windows Desktop Runtime for the framework-dependent application
-- PowerShell 7
-- OpenAI Secure MCP Tunnel client and a configured MCP connection for live ChatGPT operation
+Run the bundled `bridge-supervisor --fixture` (Windows: `app-desktop\bridge-supervisor.exe --fixture`; Linux: `app-linux/bridge-supervisor --fixture`). This opens both real windows with labeled synthetic data and no execution backend. The CI workflow captures these native Linux windows in a disposable desktop and attaches the PNGs as artifacts after a successful run. Native screenshots are pending for this candidate.
 
-From PowerShell 7 in the project root:
+## Development and release
 
-```powershell
-.\Build.ps1
-.\Test-Local.ps1
-```
+Windows compatibility build: `.\Build.ps1`. Windows Tauri build on a provisioned build host: `.\Build-Desktop.ps1`. Ubuntu Tauri build: `./Build-Linux.sh`. Build into a new directory and retain the existing installation for rollback. To revert, disconnect the candidate and invoke the old launcher. Each process change ends transient sessions.
 
-The UI test opens a simulated approval request without executing its sample command. The build writes the Windows application to `app/`. If script execution is blocked, review the scripts before applying a process-scoped execution-policy override.
+[Security model and reporting](SECURITY.md) · [Audit and test evidence](docs/RELEASE-REVIEW.md) · [Contributing](CONTRIBUTING.md) · [MIT license](LICENSE)
 
-Once the tunnel and plugin are configured, the existing launcher uses:
-
-```powershell
-.\Start-Bridge.ps1 -TunnelId $TunnelId -TunnelClient $TunnelClient
-```
-
-Keep tunnel secrets and credentials out of source control. For full deployment and rollback instructions, see the [v0.3 technical guide](docs/README-v0.3.md) and [acceptance procedure](ACCEPTANCE.md).
-
-## Security model and limitations
-
-**This application can execute arbitrary commands and must be treated as a privileged automation interface.**
-
-- Every operation requires explicit local approval, tied to the displayed command and target.
-- Examine the complete command, host, execution identity, privilege level, and expected effects. AI-provided impact descriptions are **unverified predictions**.
-- If launched with administrator privileges, approved general commands may also execute elevated. UAC-disabled environments warrant extra caution.
-- Never commit SSH private keys, passwords, tunnel configuration, audit transcripts, or operation-history files.
-- Execution timeouts and connection failures can leave effects behind. Check the target before retrying.
-- v0.3 has synchronous execution (up to 60 seconds per operation), no detached long-running jobs or live stdout streaming, and no general filesystem change tracking.
-- Windows GUI and live SSH/ChatGPT behavior need acceptance testing on the deployment machine.
-
-## Repository structure
-
-```text
-Bridge/               .NET/C# execution, approval, SSH, manager source
-Tests/                Core, protocol, and supervision test sources
-docs/README-v0.3.md   Original detailed operational README
-ACCEPTANCE.md         Windows GUI and MCP acceptance checklist
-Build.ps1             Build/publish
-Start-Bridge.ps1      Launcher
-Test-Local.ps1        UI-only test
-hosts.example.json    Placeholder SSH host metadata
-LICENSE               MIT
-```
-
-## Roadmap (not yet released)
-
-- Tauri 2 / React / TypeScript visual redesign with performance measurements
-- Better verified change evidence and diffs
-- Supervised long-running jobs with status and cancellation
-- Possible Linux support after platform-specific approval and execution work
-
-The existing WinForms manager and approval popup do **not** represent the proposed final visual design. Screenshots have not yet been published.
-
-## Development and licensing
-
-Read [DEPENDENCIES.md](DEPENDENCIES.md) and [THIRD-PARTY.txt](THIRD-PARTY.txt) for third-party notices. Original project code is available under the [MIT License](LICENSE); third-party components retain their own terms.
-
-Pull requests and issues are welcome. Do not post credentials or sensitive command output in public bug reports.
-
-**Independent project — not an official OpenAI application.**
+Next release gates are native desktop/tunnel acceptance on both platforms, a real SSH/SFTP round trip, full process-tree performance measurements and migration to a supported .NET/PowerShell runtime pair. Detached jobs are outside this release.
