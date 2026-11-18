@@ -6,10 +6,15 @@ set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly ROOT
 readonly IMAGE="${PSBRIDGE_IMAGE:-psbridge:local}"
+readonly TEST_IMAGE="${PSBRIDGE_TEST_IMAGE:-psbridge:test}"
 readonly CONTAINER="${PSBRIDGE_CONTAINER:-psbridge}"
 readonly TOOLS_VOLUME="${PSBRIDGE_TOOLS_VOLUME:-psbridge-tools}"
 readonly STATE_VOLUME="${PSBRIDGE_STATE_VOLUME:-psbridge-state}"
+readonly MANAGED_LABEL="psbridge.managed"
+readonly SECRETS_DIR="/run/psbridge-secrets"
+# Pinned: this binary receives the runtime key, so a checksum served next to the download is not enough.
 readonly CLIENT_VERSION_DEFAULT="v0.0.21"
+readonly CLIENT_SHA256_DEFAULT="9e91a539e3ae1c436d499f216a1d7514b3c86cc7779032f41b2a05821d74b03a"
 readonly CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/psbridge"
 readonly CONFIG_FILE="$CONFIG_DIR/bridgectl.env"
 
@@ -18,6 +23,10 @@ info() { printf '%s\n' "$*"; }
 ok()   { printf '%s✓%s %s\n' "$G" "$N" "$*"; }
 warn() { printf '%s!%s %s\n' "$Y" "$N" "$*" >&2; }
 die()  { printf '%s✗%s %s\n' "$R" "$N" "$*" >&2; exit 1; }
+
+CLEANUP_PATHS=()
+# shellcheck disable=SC2154  # p is assigned by the loop inside the trap string
+trap 'for p in "${CLEANUP_PATHS[@]}"; do rm -rf -- "$p"; done' EXIT
 
 detect_os() {
   case "$(uname -s)" in
@@ -36,6 +45,8 @@ require_linux() {
     macos)   die "macOS is not supported (no native desktop supervisor, Docker cannot show a macOS window)." ;;
     *)       die "Unsupported operating system." ;;
   esac
+  [[ $(uname -m) == x86_64 ]] || die "Only x86_64 is supported (the image and the tunnel-client download are linux-amd64)."
+  [[ $(id -u) -ne 0 ]] || die "Run bridgectl as a normal desktop user, not root."
 }
 
 need_docker() {
@@ -44,71 +55,131 @@ need_docker() {
 }
 
 image_exists() { docker image inspect "$IMAGE" >/dev/null 2>&1; }
-container_state() { docker inspect -f '{{.State.Status}}' "$CONTAINER" 2>/dev/null || echo absent; }
-# shellcheck source=/dev/null
-load_config() { [[ -f $CONFIG_FILE ]] && { set -a; . "$CONFIG_FILE"; set +a; } || true; }
+container_state() {
+  local s
+  s=$(docker container inspect -f '{{.State.Status}}' "$CONTAINER" 2>/dev/null) || s=absent
+  echo "${s:-absent}"
+}
+is_managed() { [[ $(docker container inspect -f "{{index .Config.Labels \"$MANAGED_LABEL\"}}" "$CONTAINER" 2>/dev/null) == 1 ]]; }
+volume_managed() { [[ $(docker volume inspect -f "{{index .Labels \"$MANAGED_LABEL\"}}" "$1" 2>/dev/null) == 1 ]]; }
 
-save_tunnel_id() {
-  umask 077
-  mkdir -p "$CONFIG_DIR"
-  printf 'TUNNEL_ID=%q\n' "$1" > "$CONFIG_FILE"
+# Refuse to act on a container that merely shares our name.
+require_ours_or_absent() {
+  [[ $(container_state) == absent ]] || is_managed || die "A container named '$CONTAINER' exists but was not created by bridgectl; refusing to touch it."
 }
 
-CLEANUP_DIR=""
-trap '[[ -z $CLEANUP_DIR ]] || rm -rf -- "$CLEANUP_DIR"' EXIT
+# TUNNEL_ID is the only value we persist. Parse it instead of sourcing the file.
+saved_tunnel_id() { if [[ -f $CONFIG_FILE ]]; then sed -n 's/^TUNNEL_ID=\(tunnel_[a-z0-9_]*\)$/\1/p' "$CONFIG_FILE" | head -1; fi; }
+
+save_tunnel_id() {
+  ( umask 077; mkdir -p "$CONFIG_DIR"; printf 'TUNNEL_ID=%s\n' "$1" > "$CONFIG_FILE" )
+}
 
 # Format enforced by the official tunnel-client: tunnel_<32 [a-z0-9]> or tunnel_<4 [a-z0-9]>_<32 [a-z0-9]>.
 valid_tunnel_id() { [[ $1 =~ ^tunnel_([a-z0-9]{4}_)?[a-z0-9]{32}$ ]]; }
+TUNNEL_ID_HINT="tunnel id must be tunnel_<32 lowercase letters/digits> (optionally tunnel_<4 chars>_<32 chars>)"
 
+# Emits docker arguments (NUL separated) that expose the user's graphical session to the container.
+#
+# SECURITY: whatever shares the display can synthesize input. An approved command running in this
+# container could therefore click "Approve" on the approval window itself. Wayland is used by default
+# and X11 (which has no client isolation at all) only with PSBRIDGE_ALLOW_X11=1. XAUTHORITY is never passed.
 display_args() {
-  # Emits docker arguments that expose the user's graphical session to the container.
-  local uid; uid=$(id -u)
-  local rt="${XDG_RUNTIME_DIR:-/run/user/$uid}"
+  local uid rt; uid=$(id -u); rt="${XDG_RUNTIME_DIR:-/run/user/$uid}"
   if [[ -n ${WAYLAND_DISPLAY:-} && -S $rt/$WAYLAND_DISPLAY ]]; then
     printf '%s\0' -e "WAYLAND_DISPLAY=$WAYLAND_DISPLAY" -e "XDG_RUNTIME_DIR=/run/user/$uid" \
-      -v "$rt/$WAYLAND_DISPLAY:/run/user/$uid/$WAYLAND_DISPLAY"
-  fi
-  if [[ -n ${DISPLAY:-} && -d /tmp/.X11-unix ]]; then
-    printf '%s\0' -e "DISPLAY=$DISPLAY" -v /tmp/.X11-unix:/tmp/.X11-unix:ro
-    [[ -n ${XAUTHORITY:-} && -f $XAUTHORITY ]] && printf '%s\0' -e XAUTHORITY=/tmp/.Xauthority -v "$XAUTHORITY:/tmp/.Xauthority:ro"
+      --mount "type=bind,source=$rt/$WAYLAND_DISPLAY,target=/run/user/$uid/$WAYLAND_DISPLAY"
+  elif [[ ${PSBRIDGE_ALLOW_X11:-0} == 1 && -n ${DISPLAY:-} && -d /tmp/.X11-unix ]]; then
+    printf '%s\0' -e "DISPLAY=$DISPLAY" --mount "type=bind,source=/tmp/.X11-unix,target=/tmp/.X11-unix,readonly"
   fi
   return 0
 }
 
+has_display() {
+  local -a d; mapfile -d '' d < <(display_args)
+  [[ ${#d[@]} -gt 0 ]]
+}
+
+require_display() {
+  if has_display; then
+    [[ -n ${WAYLAND_DISPLAY:-} ]] || warn "Using X11: any process in the container can inject input into your desktop, including the approval window."
+    return 0
+  fi
+  if [[ -n ${DISPLAY:-} && -z ${WAYLAND_DISPLAY:-} ]]; then
+    die "Only an X11 session was found. X11 gives containers full control of the desktop (including clicking Approve). Re-run with PSBRIDGE_ALLOW_X11=1 only if you accept that."
+  fi
+  die "No graphical session found (WAYLAND_DISPLAY). The approval window needs one."
+}
+
 hardening_args() {
-  printf '%s\0' --cap-drop ALL --security-opt no-new-privileges --pids-limit 1024
+  local uid; uid=$(id -u)
+  printf '%s\0' --cap-drop ALL --security-opt no-new-privileges --pids-limit 1024 \
+    --memory "${PSBRIDGE_MEMORY:-2g}" --read-only \
+    --tmpfs /tmp:rw,noexec,nosuid,nodev,size=256m \
+    --tmpfs "/run/user/$uid:rw,noexec,nosuid,nodev,size=16m,mode=0700,uid=$uid" \
+    --tmpfs "/home/psbridge/.cache:rw,noexec,nosuid,nodev,size=256m,uid=$uid" \
+    --tmpfs "/home/psbridge/.local/share:rw,nosuid,nodev,size=64m,uid=$uid" \
+    --tmpfs "/home/psbridge/.config:rw,noexec,nosuid,nodev,size=16m,uid=$uid"
 }
 
 run_container() { # run_container <extra docker args...> -- <entrypoint args...>
   local -a pre=() post=() disp=() hard=()
   while [[ $# -gt 0 && $1 != -- ]]; do pre+=("$1"); shift; done
-  [[ ${1:-} == -- ]] && shift; post=("$@")
+  if [[ ${1:-} == -- ]]; then shift; fi
+  post=("$@")
+  require_display
   mapfile -d '' disp < <(display_args)
   mapfile -d '' hard < <(hardening_args)
-  [[ ${#disp[@]} -gt 0 ]] || die "No graphical session found (WAYLAND_DISPLAY / DISPLAY). The approval window needs one."
-  docker run "${hard[@]}" "${disp[@]}" -v "$STATE_VOLUME:/home/psbridge/.local/state" "${pre[@]}" "$IMAGE" "${post[@]}"
+  docker run --pull=never "${hard[@]}" "${disp[@]}" --label "$MANAGED_LABEL=1" \
+    -v "$STATE_VOLUME:/home/psbridge/.local/state" "${pre[@]}" "$IMAGE" "${post[@]}"
+}
+
+ensure_volume() { docker volume inspect "$1" >/dev/null 2>&1 || docker volume create --label "$MANAGED_LABEL=1" "$1" >/dev/null; }
+
+# Queries the tunnel-client health socket inside the running container. Prints one line per endpoint
+# and exits non-zero unless every endpoint answered 200.
+health_probe() { # health_probe /readyz [/health ...]
+  docker exec -i "$CONTAINER" python3 - "$@" <<'PY'
+import glob, socket, sys
+paths = glob.glob("/run/user/*/psbridge.*/health.sock")
+if not paths:
+    print("  health socket not available yet"); sys.exit(2)
+bad = 0
+for ep in sys.argv[1:]:
+    s = socket.socket(socket.AF_UNIX); s.settimeout(3); s.connect(paths[0])
+    s.sendall(f"GET {ep} HTTP/1.0\r\nHost: x\r\n\r\n".encode())
+    data = b""
+    while chunk := s.recv(4096): data += chunk
+    head, _, body = data.partition(b"\r\n\r\n")
+    status = head.split(b"\r\n")[0].decode()
+    print(f"  {ep}: {status}  {body[:200].decode(errors='replace').strip()}")
+    bad |= " 200 " not in status
+sys.exit(bad)
+PY
 }
 
 # ---------------------------------------------------------------- commands
 cmd_os() { detect_os; }
 
 cmd_doctor() {
-  local fail=0
-  info "${B}bridgectl doctor${N}  (os: $(detect_os))"
-  [[ $(detect_os) == linux ]] && ok "Linux host" || { warn "not a Linux host"; fail=1; }
-  command -v docker >/dev/null && ok "docker: $(docker --version | cut -d, -f1)" || { warn "docker missing"; fail=1; }
-  docker info >/dev/null 2>&1 && ok "docker daemon reachable" || { warn "docker daemon unreachable"; fail=1; }
-  if [[ -n ${WAYLAND_DISPLAY:-} && -S ${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/${WAYLAND_DISPLAY} ]]; then ok "Wayland session ($WAYLAND_DISPLAY)"
-  elif [[ -n ${DISPLAY:-} && -d /tmp/.X11-unix ]]; then ok "X11 session ($DISPLAY)"
+  local fail=0 tid
+  info "${B}bridgectl doctor${N}  (os: $(detect_os), arch: $(uname -m))"
+  if [[ $(detect_os) == linux ]]; then ok "Linux host"; else warn "not a Linux host"; fail=1; fi
+  if [[ $(uname -m) == x86_64 ]]; then ok "x86_64"; else warn "unsupported architecture (x86_64 only)"; fail=1; fi
+  if command -v docker >/dev/null; then ok "docker: $(docker --version | cut -d, -f1)"; else warn "docker missing"; fail=1; fi
+  if docker info >/dev/null 2>&1; then ok "docker daemon reachable"; else warn "docker daemon unreachable"; fail=1; fi
+  if has_display; then ok "graphical session usable (${WAYLAND_DISPLAY:-X11})"
+  elif [[ -n ${DISPLAY:-} ]]; then warn "only X11 found: refused unless PSBRIDGE_ALLOW_X11=1 (X11 lets containers click Approve)"; fail=1
   else warn "no graphical session: the approval window cannot be shown"; fail=1; fi
-  [[ $(id -u) -ne 0 ]] && ok "running as non-root (uid $(id -u))" || { warn "running as root"; fail=1; }
+  if [[ $(id -u) -ne 0 ]]; then ok "running as non-root (uid $(id -u))"; else warn "running as root"; fail=1; fi
   if image_exists; then ok "image $IMAGE present"; else warn "image $IMAGE missing (run: ./bridgectl build)"; fi
-  if docker volume inspect "$TOOLS_VOLUME" >/dev/null 2>&1 && \
-     docker run --rm -v "$TOOLS_VOLUME:/t:ro" --entrypoint test "$IMAGE" -x /t/tunnel-client 2>/dev/null; then ok "tunnel-client installed"
+  if image_exists && volume_managed "$TOOLS_VOLUME" && \
+     docker run --rm --pull=never -v "$TOOLS_VOLUME:/t:ro" --entrypoint test "$IMAGE" -x /t/tunnel-client 2>/dev/null; then ok "tunnel-client installed"
   else warn "tunnel-client not installed (run: ./bridgectl setup)"; fi
-  load_config
-  if [[ -n ${TUNNEL_ID:-} ]]; then valid_tunnel_id "$TUNNEL_ID" && ok "tunnel id saved" || { warn "saved tunnel id looks malformed"; fail=1; }
-  else warn "no tunnel id saved (run: ./bridgectl setup --tunnel-id tunnel_...)"; fi
+  tid=$(saved_tunnel_id)
+  if [[ -z $tid ]]; then warn "no tunnel id saved (run: ./bridgectl setup --tunnel-id tunnel_...)"
+  elif valid_tunnel_id "$tid"; then ok "tunnel id saved"
+  else warn "saved tunnel id looks malformed"; fail=1; fi
   return $fail
 }
 
@@ -122,42 +193,55 @@ cmd_build() {
 cmd_test() {
   require_linux; need_docker
   info "Running every suite in a clean container build (any failure fails this command)…"
-  docker build --target test --progress=plain -t "${IMAGE%:*}:test" "$ROOT" 2>&1 | \
-    awk '/^#[0-9]+ [0-9.]+ (===|PASS|FAIL|ALL SUITES|window|both windows|Worker idle|skipped)/{print} /ERROR|FAILED|error:/{print}'
-  [[ ${PIPESTATUS[0]} -eq 0 ]] || die "tests failed (re-run: docker build --target test --progress=plain .)"
+  local log gui status
+  log=$(mktemp); gui=$(mktemp); CLEANUP_PATHS+=("$log" "$gui")
+  # --no-cache-filter: never report a cached pass; the suites include real-time protocol checks.
+  status=0
+  docker build --target test --no-cache-filter test --progress=plain -t "$TEST_IMAGE" "$ROOT" >"$log" 2>&1 || status=$?
+  grep -E '^#[0-9]+ [0-9.]+ (===|PASS|FAIL|ALL SUITES|Worker idle)|ERROR|FAILED|error:' "$log" | sed -E 's/^#[0-9]+ [0-9.]+ //' || true
+  if [[ $status -ne 0 ]]; then
+    tail -40 "$log" >&2
+    die "tests failed (re-run: docker build --target test --no-cache-filter test --progress=plain .)"
+  fi
   ok "unit, worker and MCP protocol suites passed"
   # The GUI smoke needs a real container run: a build step cannot host a WebKit window reliably.
-  docker run --rm "${IMAGE%:*}:test" bash docker/run-tests.sh gui | tail -3 || die "GUI smoke failed"
-  ok "GUI smoke passed (both windows rendered)"
+  if docker run --rm --pull=never "$TEST_IMAGE" bash docker/run-tests.sh gui >"$gui" 2>&1; then
+    ok "GUI smoke passed (both windows rendered)"
+  else
+    cat "$gui" >&2; die "GUI smoke failed"
+  fi
 }
 
 cmd_setup() {
   require_linux; need_docker
-  local id="" version="$CLIENT_VERSION_DEFAULT"
+  local id="" version="$CLIENT_VERSION_DEFAULT" sha="$CLIENT_SHA256_DEFAULT"
   while [[ $# -gt 0 ]]; do case $1 in
     --tunnel-id) id=${2:?}; shift 2 ;;
-    --client-version) version=${2:?}; shift 2 ;;
+    --client-version) version=${2:?}; sha=""; shift 2 ;;
+    --client-sha256) sha=${2:?}; shift 2 ;;
     *) die "unknown option $1" ;;
   esac; done
-  [[ -z $id ]] || { valid_tunnel_id "$id" || die "tunnel id must be tunnel_<32 lowercase letters/digits> (optionally tunnel_<4 chars>_<32 chars>)"; save_tunnel_id "$id"; ok "tunnel id saved to $CONFIG_FILE"; }
+  [[ $version =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "client version must look like v0.0.21"
+  [[ -n $sha ]] || die "A non-default client version needs --client-sha256 <hash> (from the release page; the runtime key is entrusted to this binary)."
+  [[ $sha =~ ^[0-9a-f]{64}$ ]] || die "--client-sha256 must be 64 lowercase hex characters"
+  if [[ -n $id ]]; then valid_tunnel_id "$id" || die "$TUNNEL_ID_HINT"; save_tunnel_id "$id"; ok "tunnel id saved to $CONFIG_FILE"; fi
   image_exists || cmd_build
-  install_client "$version"
+  install_client "$version" "$sha"
   ok "setup complete. Next: ./bridgectl start"
 }
 
 install_client() {
-  local version=$1 tmp base zip
+  local version=$1 sha=$2 tmp base zip
   command -v curl >/dev/null && command -v sha256sum >/dev/null && command -v python3 >/dev/null || die "curl, sha256sum and python3 are needed on the host to fetch the tunnel client."
-  tmp=$(mktemp -d); CLEANUP_DIR=$tmp
+  tmp=$(mktemp -d); CLEANUP_PATHS+=("$tmp")
   base="https://github.com/openai/tunnel-client/releases/download/$version"
   zip="tunnel-client-$version-linux-amd64.zip"
   info "Downloading official tunnel-client $version (linux-amd64)…"
   curl -fsSL -o "$tmp/$zip" "$base/$zip"
-  curl -fsSL -o "$tmp/SHA256SUMS.txt" "$base/SHA256SUMS.txt"
-  (cd "$tmp" && grep " $zip\$" SHA256SUMS.txt | sha256sum -c -) || die "checksum mismatch for $zip"
-  ok "checksum verified"
+  echo "$sha  $tmp/$zip" | sha256sum -c - >/dev/null || die "checksum mismatch for $zip (expected $sha)"
+  ok "checksum matches the pinned value"
   python3 - "$tmp/$zip" "$tmp/out" <<'PY'
-import sys, zipfile, os, stat
+import sys, zipfile, os
 z, out = sys.argv[1:]
 with zipfile.ZipFile(z) as f:
     for n in f.namelist():
@@ -168,45 +252,74 @@ if len(hits) != 1: raise SystemExit('expected exactly one tunnel-client binary, 
 os.replace(hits[0], os.path.join(out, 'tunnel-client.bin'))
 os.chmod(os.path.join(out, 'tunnel-client.bin'), 0o755)
 PY
-  docker volume create "$TOOLS_VOLUME" >/dev/null
-  docker run --rm --user 0 --entrypoint sh -v "$TOOLS_VOLUME:/t" -v "$tmp/out:/in:ro" "$IMAGE" \
-    -c 'install -m 0755 /in/tunnel-client.bin /t/tunnel-client && echo "'"$version"'" > /t/VERSION'
+  ensure_volume "$TOOLS_VOLUME"
+  docker run --rm --pull=never --user 0 -e "CLIENT_VERSION=$version" --entrypoint sh -v "$TOOLS_VOLUME:/t" -v "$tmp/out:/in:ro" "$IMAGE" \
+    -c 'install -m 0755 /in/tunnel-client.bin /t/tunnel-client && printf "%s\n" "$CLIENT_VERSION" > /t/VERSION'
   ok "tunnel-client $version installed into volume $TOOLS_VOLUME"
 }
 
 cmd_start() {
   require_linux; need_docker
-  load_config
-  local id=${TUNNEL_ID:-}
+  local id; id=$(saved_tunnel_id)
   while [[ $# -gt 0 ]]; do case $1 in
     --tunnel-id) id=${2:?}; shift 2 ;;
     *) die "unknown option $1" ;;
   esac; done
   [[ -n $id ]] || die "No tunnel id. Run ./bridgectl setup --tunnel-id tunnel_… first."
-  valid_tunnel_id "$id" || die "tunnel id must be tunnel_<32 lowercase letters/digits> (optionally tunnel_<4 chars>_<32 chars>)"
+  valid_tunnel_id "$id" || die "$TUNNEL_ID_HINT"
+  # Every precondition is checked before the key is requested.
   image_exists || die "Image missing. Run ./bridgectl setup."
-  docker volume inspect "$TOOLS_VOLUME" >/dev/null 2>&1 || die "tunnel-client not installed. Run ./bridgectl setup."
+  volume_managed "$TOOLS_VOLUME" || die "tunnel-client not installed. Run ./bridgectl setup."
+  require_ours_or_absent
   [[ $(container_state) == absent ]] || die "Already present ($(container_state)). Use ./bridgectl stop first."
+  require_display
   [[ -t 0 ]] || die "Start from an interactive terminal: the runtime key is entered at a hidden prompt."
-  local key
+  warn "Approved commands run inside the container, but the container shares your display. Read every request before approving."
+
+  local key uid; uid=$(id -u)
   read -r -s -p "Restricted Platform runtime key (Tunnels Read + Use): " key; echo
   [[ -n $key ]] || die "Key required."
-  # The key is passed by name only (-e VAR), so it never appears on a command line.
-  CONTROL_PLANE_API_KEY=$key run_container -d --name "$CONTAINER" --init \
-    -e CONTROL_PLANE_API_KEY -e "TUNNEL_ID=$id" -e TUNNEL_CLIENT=/opt/tunnel/tunnel-client \
+  ensure_volume "$STATE_VOLUME"
+  # The key never enters the container config, a command line or the image: it is piped over `docker exec`
+  # into a private tmpfs file that Start-Linux.sh reads once and deletes.
+  run_container -d --name "$CONTAINER" --init \
+    --tmpfs "$SECRETS_DIR:rw,noexec,nosuid,nodev,size=1m,mode=0700,uid=$uid" \
+    -e "TUNNEL_ID=$id" -e TUNNEL_CLIENT=/opt/tunnel/tunnel-client -e "PSBRIDGE_KEY_FILE=$SECRETS_DIR/key" \
     -v "$TOOLS_VOLUME:/opt/tunnel:ro" -- start >/dev/null
+  if ! printf '%s' "$key" | docker exec -i "$CONTAINER" sh -c "umask 077; cat > $SECRETS_DIR/key.tmp && mv $SECRETS_DIR/key.tmp $SECRETS_DIR/key"; then
+    key=; docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; die "could not deliver the key to the container"
+  fi
   key=
-  sleep 2
-  if [[ $(container_state) == running ]]; then ok "started. Check: ./bridgectl status  |  logs: ./bridgectl logs -f"
-  else docker logs "$CONTAINER" 2>&1 | tail -15 >&2; die "container exited during startup"; fi
+
+  info "Waiting for the bridge to become ready…"
+  local ready=0
+  for _ in $(seq 1 30); do
+    if [[ $(container_state) != running ]]; then
+      docker logs "$CONTAINER" 2>&1 | tail -15 >&2; docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+      die "container exited during startup"
+    fi
+    if health_probe /readyz >/dev/null 2>&1; then ready=1; break; fi
+    sleep 1
+  done
+  if [[ $ready -ne 1 ]]; then
+    docker logs "$CONTAINER" 2>&1 | tail -10 | cut -c1-240 >&2
+    die "not ready after 30s. The container is left running for inspection (./bridgectl logs, then ./bridgectl stop)."
+  fi
+  sleep 4
+  if docker logs "$CONTAINER" 2>&1 | grep -qE 'invalid_api_key|status_code=401'; then
+    docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+    die "OpenAI rejected the key (401). Check that it has Tunnels Read + Use for the organization that owns this tunnel."
+  fi
+  ok "bridge ready. Status: ./bridgectl status  |  logs: ./bridgectl logs -f"
 }
 
 cmd_stop() {
   need_docker
-  case $(container_state) in
-    absent) info "not running" ;;
-    *) docker rm -f "$CONTAINER" >/dev/null; ok "stopped and removed (host-key pins and audit stay in volume $STATE_VOLUME)" ;;
-  esac
+  [[ $(container_state) != absent ]] || { info "not running"; return 0; }
+  is_managed || die "Container '$CONTAINER' was not created by bridgectl; refusing to touch it."
+  docker stop -t 15 "$CONTAINER" >/dev/null 2>&1 || true
+  docker rm "$CONTAINER" >/dev/null
+  ok "stopped and removed (host-key pins and audit stay in volume $STATE_VOLUME)"
 }
 
 cmd_restart() { cmd_stop; cmd_start "$@"; }
@@ -215,25 +328,13 @@ cmd_status() {
   need_docker
   local s; s=$(container_state)
   info "${B}container${N}  $CONTAINER: $s"
-  [[ $s == absent ]] && { info "image       $(image_exists && echo present || echo missing)"; return 0; }
-  docker inspect -f 'started     {{.State.StartedAt}}  restarts={{.RestartCount}}  exit={{.State.ExitCode}}' "$CONTAINER"
+  if [[ $s == absent ]]; then info "image       $(image_exists && echo present || echo missing)"; return 0; fi
+  is_managed || warn "this container was not created by bridgectl"
+  docker container inspect -f 'started     {{.State.StartedAt}}  restarts={{.RestartCount}}  exit={{.State.ExitCode}}' "$CONTAINER"
   if [[ $s == running ]]; then
     info "${B}processes${N}"; docker top "$CONTAINER" -eo pid,etime,args 2>/dev/null | cut -c1-110 | sed 's/^/  /'
-    info "${B}tunnel readiness${N}"
-    docker exec "$CONTAINER" python3 - <<'PY' 2>/dev/null || echo "  health socket not reachable yet"
-import glob, socket
-for path in glob.glob("/run/user/*/psbridge.*/health.sock"):
-    for ep in ("/readyz", "/health"):
-        s = socket.socket(socket.AF_UNIX); s.settimeout(3); s.connect(path)
-        s.sendall(f"GET {ep} HTTP/1.0\r\nHost: x\r\n\r\n".encode())
-        data = b""
-        while chunk := s.recv(4096): data += chunk
-        head, _, body = data.partition(b"\r\n\r\n")
-        print(f"  {ep}: {head.split(chr(13).encode())[0].decode()}  {body[:200].decode(errors='replace').strip()}")
-    break
-else:
-    raise SystemExit(1)
-PY
+    info "${B}tunnel health${N}"
+    health_probe /readyz /health || true
   fi
 }
 
@@ -244,13 +345,22 @@ cmd_fixture() { require_linux; need_docker; image_exists || cmd_build; run_conta
 
 cmd_clean() {
   need_docker
+  local all=0 yes=0 a v reply
+  for a in "$@"; do case $a in --all) all=1 ;; --yes) yes=1 ;; *) die "unknown option $a" ;; esac; done
   cmd_stop
-  docker image rm -f "$IMAGE" "${IMAGE%:*}:test" >/dev/null 2>&1 || true
-  ok "images removed"
-  if [[ ${1:-} == --all ]]; then
-    docker volume rm -f "$TOOLS_VOLUME" "$STATE_VOLUME" >/dev/null 2>&1 || true
-    rm -rf "$CONFIG_DIR"
-    ok "volumes (tunnel-client, host-key pins, audit) and saved config removed"
+  docker image rm "$IMAGE" "$TEST_IMAGE" >/dev/null 2>&1 || true
+  if image_exists; then warn "image $IMAGE could not be removed (in use?)"; else ok "images removed"; fi
+  if [[ $all -eq 1 ]]; then
+    if [[ $yes -ne 1 ]]; then
+      warn "--all deletes the SSH host-key pins (trust resets), the audit history and the saved tunnel id."
+      read -r -p "Type 'yes' to continue: " reply; [[ $reply == yes ]] || die "aborted"
+    fi
+    for v in "$TOOLS_VOLUME" "$STATE_VOLUME"; do
+      docker volume inspect "$v" >/dev/null 2>&1 || continue
+      volume_managed "$v" || { warn "volume $v was not created by bridgectl; leaving it"; continue; }
+      if docker volume rm "$v" >/dev/null 2>&1; then ok "removed volume $v"; else warn "could not remove volume $v (in use?)"; fi
+    done
+    rm -rf -- "$CONFIG_DIR"; ok "saved config removed"
   else info "kept volumes; use 'clean --all' to also delete host-key pins, audit history and the saved tunnel id"; fi
 }
 
@@ -258,18 +368,21 @@ usage() {
   cat <<EOF
 ${B}bridgectl${N} - PowerShellGPTBridge Docker manager
 
-  setup [--tunnel-id ID] [--client-version vX.Y.Z]   check, build image, install verified tunnel-client
+  setup [--tunnel-id ID] [--client-version vX.Y.Z --client-sha256 HASH]
+                                                     check, build image, install the pinned tunnel-client
   build                                              (re)build the runtime image
   test                                               run every automated suite in a clean container
   start [--tunnel-id ID]                             start the bridge (prompts for the runtime key)
   stop | restart                                     stop (remove) / restart the container
-  status                                             container, processes and tunnel readiness
+  status                                             container, processes and tunnel health
   logs [-f]                                          container logs
   ui-test | fixture                                  approval window test / synthetic data UI preview
   shell                                              shell in the running (or a fresh) container
   doctor                                             diagnose the host
-  clean [--all]                                      remove images (--all: also volumes and config)
+  clean [--all] [--yes]                              remove images (--all: also volumes and config)
   os                                                 print the detected operating system
+
+Environment: PSBRIDGE_ALLOW_X11=1 permits X11 (unsafe: containers can click Approve), PSBRIDGE_MEMORY (default 2g).
 EOF
 }
 
