@@ -1,0 +1,11 @@
+{
+  "server2.example.invalid:22": {
+    "Address": "server2.example.invalid",
+    "Port": 22,
+    "FriendlyName": "Server 2",
+    "OperatingSystem": "linux",
+    "Fingerprint": "REPLACE_WITH_INDEPENDENTLY_VERIFIED_SHA256_FINGERPRINT",
+    "Username": "operator",
+    "Authentication": "private-key"
+  }
+}
