@@ -1,0 +1,287 @@
+{
+  "proto": [
+    {
+      "name": "discovery both tools write annotations",
+      "status": "PASS"
+    },
+    {
+      "name": "hidden control characters refused",
+      "status": "PASS"
+    },
+    {
+      "name": "rejection reason and zero execution",
+      "status": "PASS"
+    },
+    {
+      "name": "expired draft is separate from deliberate rejection",
+      "status": "PASS"
+    },
+    {
+      "name": "UI failure prevents execution",
+      "status": "PASS"
+    },
+    {
+      "name": "approved once",
+      "status": "PASS"
+    },
+    {
+      "name": "repeat fresh approval and same session",
+      "status": "PASS"
+    },
+    {
+      "name": "modified gets new approval",
+      "status": "PASS"
+    },
+    {
+      "name": "timeout bounds reject before execution",
+      "status": "PASS"
+    },
+    {
+      "name": "fixed date classified READ",
+      "status": "PASS"
+    },
+    {
+      "name": "arbitrary commands classified WRITE",
+      "status": "PASS"
+    },
+    {
+      "name": "overlap rejects one",
+      "status": "PASS"
+    },
+    {
+      "name": "stop task cancellation reported",
+      "status": "PASS"
+    },
+    {
+      "name": "stop task latches against subsequent request",
+      "status": "PASS"
+    },
+    {
+      "name": "EOF terminates server",
+      "status": "PASS"
+    },
+    {
+      "name": "discovery both tools write annotations",
+      "status": "PASS"
+    },
+    {
+      "name": "elevated prototype rejects arbitrary script",
+      "status": "PASS"
+    },
+    {
+      "name": "elevated prototype rejects broker escape",
+      "status": "PASS"
+    },
+    {
+      "name": "EOF terminates server",
+      "status": "PASS"
+    },
+    {
+      "name": "discovery both tools write annotations",
+      "status": "PASS"
+    },
+    {
+      "name": "hidden control characters refused",
+      "status": "PASS"
+    },
+    {
+      "name": "rejection reason and zero execution",
+      "status": "PASS"
+    },
+    {
+      "name": "expired draft is separate from deliberate rejection",
+      "status": "PASS"
+    },
+    {
+      "name": "UI failure prevents execution",
+      "status": "PASS"
+    },
+    {
+      "name": "approved once",
+      "status": "PASS"
+    },
+    {
+      "name": "repeat fresh approval and same session",
+      "status": "PASS"
+    },
+    {
+      "name": "modified gets new approval",
+      "status": "PASS"
+    },
+    {
+      "name": "timeout bounds reject before execution",
+      "status": "PASS"
+    },
+    {
+      "name": "fixed date classified READ",
+      "status": "PASS"
+    },
+    {
+      "name": "arbitrary commands classified WRITE",
+      "status": "PASS"
+    },
+    {
+      "name": "overlap rejects one",
+      "status": "PASS"
+    },
+    {
+      "name": "stop task cancellation reported",
+      "status": "PASS"
+    },
+    {
+      "name": "stop task latches against subsequent request",
+      "status": "PASS"
+    },
+    {
+      "name": "EOF terminates server",
+      "status": "PASS"
+    },
+    {
+      "name": "discovery both tools write annotations",
+      "status": "PASS"
+    },
+    {
+      "name": "elevated prototype rejects arbitrary script",
+      "status": "PASS"
+    },
+    {
+      "name": "elevated prototype rejects broker escape",
+      "status": "PASS"
+    },
+    {
+      "name": "EOF terminates server",
+      "status": "PASS"
+    },
+    {
+      "name": "discovery both tools write annotations",
+      "status": "PASS"
+    },
+    {
+      "name": "configured elevated general mode still requires approval",
+      "status": "PASS"
+    },
+    {
+      "name": "EOF terminates server",
+      "status": "PASS"
+    }
+  ],
+  "pclock": [
+    {
+      "name": "discovery both tools write annotations",
+      "status": "PASS"
+    },
+    {
+      "name": "real 60s endpoint timer expires with draft and no dispatch",
+      "status": "PASS"
+    },
+    {
+      "name": "EOF terminates server",
+      "status": "PASS"
+    }
+  ],
+  "pbudget": [
+    {
+      "name": "discovery both tools write annotations",
+      "status": "PASS"
+    },
+    {
+      "name": "late approval declines insufficient execution budget",
+      "status": "PASS"
+    },
+    {
+      "name": "EOF terminates server",
+      "status": "PASS"
+    }
+  ],
+  "coreresults": [
+    {
+      "name": "set variable",
+      "status": "PASS"
+    },
+    {
+      "name": "read persistent variable",
+      "status": "PASS"
+    },
+    {
+      "name": "define function",
+      "status": "PASS"
+    },
+    {
+      "name": "call persistent function",
+      "status": "PASS"
+    },
+    {
+      "name": "change working directory",
+      "status": "PASS"
+    },
+    {
+      "name": "read persistent working directory",
+      "status": "PASS"
+    },
+    {
+      "name": "bounded success stream",
+      "status": "PASS"
+    },
+    {
+      "name": "bounded error stream",
+      "status": "PASS"
+    },
+    {
+      "name": "native exit not invented",
+      "status": "PASS"
+    },
+    {
+      "name": "output and error together",
+      "status": "PASS"
+    },
+    {
+      "name": "shadow Get-Date",
+      "status": "PASS"
+    },
+    {
+      "name": "green date pins cmdlet",
+      "status": "PASS"
+    },
+    {
+      "name": "managed console streams",
+      "status": "PASS"
+    },
+    {
+      "name": "warning is not failure",
+      "status": "PASS"
+    },
+    {
+      "name": "bounded IPC round trip",
+      "status": "PASS"
+    },
+    {
+      "name": "oversize IPC rejected before allocation",
+      "status": "PASS"
+    }
+  ],
+  "supresults": [
+    "PASS SSH and SFTP accept an exact pinned host key",
+    "PASS changed SSH host key refused",
+    "PASS trusted pin follows audited accept path",
+    "PASS changed pin follows audited reject path",
+    "PASS both pin decisions audited",
+    "PASS unknown host rejected by local operator",
+    "PASS cancelled approval cannot trust new host",
+    "PASS pending approval interrupted before dispatch",
+    "PASS interrupted dispatch recovered as unknown",
+    "PASS atomic updates preserve a single record",
+    "PASS free text and raw diff excluded from automatic storage",
+    "PASS expired history removed on launch",
+    "PASS capture requires explicit selection",
+    "PASS new text file shows observed additions",
+    "PASS empty file evidence",
+    "PASS large and binary previews excluded"
+  ],
+  "sessionresults": [
+    "PASS set persistent variable",
+    "PASS second request same worker",
+    "PASS pinned date cmdlet",
+    "Worker idle measurement: 0.70% of one CPU, RSS 103.6 MiB, 10.0s sample.",
+    "PASS timeout invalidates worker"
+  ]
+}

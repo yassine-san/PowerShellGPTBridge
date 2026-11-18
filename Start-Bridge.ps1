@@ -5,20 +5,24 @@ param(
     [Parameter(Mandatory)][string] $TunnelClient,
     [switch] $RedactCommands,
     [switch] $LogCommandText,
-    [switch] $AllowElevatedGetDate
+    [switch] $AllowElevatedGetDate,
+    [switch] $AllowElevatedGeneral,
+    [switch] $Desktop
 )
 $ErrorActionPreference = 'Stop'
 if ($RedactCommands -and $LogCommandText) { throw 'Choose command hashing or command-text logging, not both.' }
 if (-not $IsWindows) { throw 'Windows x64 required.' }
 $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
 if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) -and -not $AllowElevatedGetDate) {
+    if (-not $AllowElevatedGeneral) { throw "Use a standard desktop, -AllowElevatedGetDate or explicitly opt in with -AllowElevatedGeneral." }
     Write-Warning 'Using the configured elevated Windows account. Approved general commands have Administrator privileges.'
 }
 $tunnel = (Get-Item -LiteralPath $TunnelClient).FullName
 if ([IO.Path]::GetFileName($tunnel) -ine 'tunnel-client.exe') { throw 'Select the official tunnel-client.exe.' }
-$bridge = (Get-Item -LiteralPath (Join-Path $PSScriptRoot 'app/Bridge.exe')).FullName
+$appDir = if ($Desktop) { 'app-desktop' } else { 'app' }
+$bridge = (Get-Item -LiteralPath (Join-Path $PSScriptRoot "$appDir/Bridge.exe")).FullName
 Write-Host "Bridge executable: $bridge"
-Write-Host "Bridge assembly SHA256: $((Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'app/Bridge.dll') -Algorithm SHA256).Hash)"
+Write-Host "Bridge assembly SHA256: $((Get-FileHash -LiteralPath (Join-Path $PSScriptRoot "$appDir/Bridge.dll") -Algorithm SHA256).Hash)"
 $bridgeCommand = '"' + $bridge.Replace('\','/') + '"'
 # Unique private directory also contains the local health socket. No TCP listener.
 $work = [IO.DirectoryInfo]::new((Join-Path $env:LOCALAPPDATA ('psb-' + [guid]::NewGuid().ToString('N').Substring(0,12))))
@@ -65,6 +69,7 @@ mcp:
         $value = [Environment]::GetEnvironmentVariable($name)
         if ($value) { $start.Environment[$name] = $value }
     }
+    if ($AllowElevatedGeneral) { $start.Environment['PSBRIDGE_ALLOW_ELEVATED_GENERAL'] = '1' }
     if ($AllowElevatedGetDate) {
         Write-Warning 'Elevated Get-Date prototype explicitly enabled. Every request still requires approval.'
         $start.Environment['PSBRIDGE_ALLOW_ELEVATED_GET_DATE'] = '1'

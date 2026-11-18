@@ -3,7 +3,7 @@ using System.Text;
 using System.Text.Json;
 namespace PersistentBridge;
 internal sealed record Host(string Address, int Port, string FriendlyName, string OperatingSystem, string Fingerprint, string Username, string Authentication);
-internal sealed class SshSessions(Window window, Audit audit) : IDisposable
+internal sealed class SshSessions(IOperatorView window, Audit audit) : IDisposable
 {
     private readonly Dictionary<string, SshClient> clients = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, PrivateKeyFile> keys = new(StringComparer.OrdinalIgnoreCase);
@@ -15,7 +15,7 @@ internal sealed class SshSessions(Window window, Audit audit) : IDisposable
     public bool Connected(string key) => clients.TryGetValue(key, out var client) && client.IsConnected;
     public string Identity(string key) => clients.TryGetValue(key, out var client) ? client.ConnectionInfo.Username : "not authenticated";
     public Guid Id(string key) => ids.GetValueOrDefault(key);
-    public async Task<Credential?> Credential(string key, CancellationToken token) => CredentialStore.Load(key) ?? await CredentialStore.Prompt(window, key, token);
+    public async Task<Credential?> Credential(string key, CancellationToken token) => CredentialStore.Load(key) ?? await window.RequestCredential(key, false, token);
     public async Task Connect(string host, int port, Credential credential, Guid requestId, Guid taskId, System.Diagnostics.Stopwatch budget, int seconds, CancellationToken token)
     {
         var key = Key(host, port); if (Connected(key)) throw new InvalidOperationException("Already connected");
@@ -29,10 +29,15 @@ internal sealed class SshSessions(Window window, Audit audit) : IDisposable
         var info = new ConnectionInfo(host, port, credential.Username, auth) { Timeout = TimeSpan.FromSeconds(pinned == null ? 80 : 15) };
         var client = new SshClient(info); bool keyRejected = false; HostApprovalException? hostDecision = null; bool shortBudget = false;
         client.HostKeyReceived += (_, e) => {
-            string fingerprint = "SHA256:" + Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(e.HostKey)).TrimEnd('=');
-            if (pinned != null) { e.CanTrust = pinned.Fingerprint == fingerprint; keyRejected = !e.CanTrust;
-                audit.Write("host_key_check", new { id = requestId, target = key, fingerprint, accepted = e.CanTrust }); return; }
-            if (token.IsCancellationRequested || budget.Elapsed.TotalSeconds >= 44.5) { e.CanTrust = false; shortBudget = true; return; }
+            e.CanTrust = false;
+            e.CanTrust = HostKeyPin.Accept(pinned?.Fingerprint,e.HostKey,ReviewNew,
+                (fingerprint,matches) => {
+                    keyRejected = !matches;
+                    audit.Write("host_key_check", new { id = requestId, target = key, fingerprint, accepted = matches });
+                }, handshake.Token);
+            bool ReviewNew(string fingerprint)
+            {
+            if (token.IsCancellationRequested || budget.Elapsed.TotalSeconds >= 44.5) { shortBudget = true; return false; }
             handshake.CancelAfter(Timeout.InfiniteTimeSpan);
             networkClock.Stop();
             handshake.Token.ThrowIfCancellationRequested();
@@ -46,21 +51,25 @@ internal sealed class SshSessions(Window window, Audit audit) : IDisposable
             long start = System.Diagnostics.Stopwatch.GetTimestamp();
             approval.CancelAfter(TimeSpan.FromSeconds(60));
             var decision = window.Approve(op, approval.Token, start).GetAwaiter().GetResult();
-            e.CanTrust = decision.Approved && !approval.IsCancellationRequested && System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalSeconds < 60;
-            window.Record(entry with { Status = e.CanTrust ? "approved" : decision.Status, Approval = e.CanTrust ? "approved" : decision.Status,
+            bool consent = decision.Approved && !approval.IsCancellationRequested && System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalSeconds < 60;
+            window.Record(entry with { Status = consent ? "approved" : decision.Status, Approval = consent ? "approved" : decision.Status,
                 Decided = DateTimeOffset.UtcNow, Ended = DateTimeOffset.UtcNow, Reason = decision.Reason });
-            audit.Write("host_authorization", new { id = hostApprovalId, parent_id = requestId, target = key, fingerprint, approved = e.CanTrust });
+            audit.Write("host_authorization", new { id = hostApprovalId, parent_id = requestId, target = key, fingerprint, approved = consent });
             var left = networkLimit - networkClock.Elapsed;
-            if (left <= TimeSpan.Zero) { e.CanTrust = false; handshake.Cancel(); return; }
+            if (left <= TimeSpan.Zero) { handshake.Cancel(); return false; }
             networkClock.Start(); handshake.CancelAfter(left);
-            if (e.CanTrust) accepted = fingerprint;
+            consent = consent && !approval.IsCancellationRequested && System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalSeconds < 60;
+            if (consent) accepted = fingerprint;
             else hostDecision = new(hostApprovalId, decision with { Approved = false, Status = token.IsCancellationRequested ? "cancelled" : decision.Approved ? "approval_expired" : decision.Status });
+            return consent;
+            }
         };
         try {
             await client.ConnectAsync(handshake.Token);
             if (!client.IsConnected) throw new IOException("SSH not connected");
             if (accepted != null) { hosts[key] = new Host(host, port, host, "unknown", accepted, credential.Username, credential.Method);
-                File.WriteAllText(Registry, JsonSerializer.Serialize(hosts, new JsonSerializerOptions { WriteIndented = true })); }
+                File.WriteAllText(Registry + ".tmp", JsonSerializer.Serialize(hosts, new JsonSerializerOptions { WriteIndented = true }));
+                File.Move(Registry + ".tmp",Registry,true); }
             CredentialStore.Save(key, credential); clients[key] = client; if (privateKey != null) keys[key] = privateKey; secrets[key] = credential.Secret; ids[key] = Guid.NewGuid();
         } catch { client.Dispose(); privateKey?.Dispose(); CredentialStore.Forget(key);
             if (handshake.IsCancellationRequested && !token.IsCancellationRequested) throw new TimeoutException("SSH handshake timed out.");
@@ -96,7 +105,10 @@ internal sealed class SshSessions(Window window, Audit audit) : IDisposable
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(token); stop.CancelAfter(TimeSpan.FromSeconds(seconds));
         using var sftp = new SftpClient(clients[key].ConnectionInfo); sftp.OperationTimeout = TimeSpan.FromSeconds(seconds);
         var expected = Hosts[key].Fingerprint;
-        sftp.HostKeyReceived += (_, e) => e.CanTrust = expected == "SHA256:" + Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(e.HostKey)).TrimEnd('=');
+        sftp.HostKeyReceived += (_, e) => {
+            e.CanTrust = false;
+            e.CanTrust = HostKeyPin.Matches(expected,e.HostKey);
+        };
         // Disposal cancels a blocking transfer; a partial file may remain. Never overwrite or auto-retry.
         using var registration = stop.Token.Register(() => { try { sftp.Dispose(); } catch { } });
         string? fileDiff = null;

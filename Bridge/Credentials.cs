@@ -13,6 +13,9 @@ internal static class CredentialStore
         try { File.WriteAllBytes(FileFor(target), ProtectedData.Protect(bytes, null, DataProtectionScope.CurrentUser)); }
         finally { CryptographicOperations.ZeroMemory(bytes); } }
     public static void Forget(string target) { File.Delete(FileFor(target)); }
+#if TAURI_DESKTOP
+    public static Task<Credential?> Prompt(Window window,string target,CancellationToken token,bool sudo=false) => window.Credential(target,sudo,token);
+#else
     public static Task<Credential?> Prompt(Window window, string target, CancellationToken token, bool sudo = false) => window.OnUi<Credential?>(() => {
         using var form = new Form { Text = sudo ? "Local sudo credential — " + target : "SSH credentials — " + target,
             Width = 580, Height = 360, TopMost = true, StartPosition = FormStartPosition.CenterParent };
@@ -36,4 +39,5 @@ internal static class CredentialStore
         if (form.ShowDialog(window) != DialogResult.OK || token.IsCancellationRequested || (!sudo && string.IsNullOrWhiteSpace(username.Text))) return null;
         return new Credential(username.Text, method.SelectedItem!.ToString()!, secret.Text, path.Text, save.Checked);
     }, null, token);
+#endif
 }

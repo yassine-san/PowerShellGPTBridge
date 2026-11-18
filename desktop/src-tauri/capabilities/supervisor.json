@@ -1,0 +1,11 @@
+{
+  "identifier": "supervisor",
+  "windows": ["manager", "approval"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-start-dragging",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize"
+  ]
+}

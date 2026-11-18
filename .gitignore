@@ -36,3 +36,14 @@ audit.json
 *secrets*.json
 *token*.json
 !hosts.example.json
+
+app-linux/
+dist/
+desktop/src-tauri/gen/
+operation-*.json*
+credential-*.bin
+*.jsonl
+*_history
+ConsoleHost_history.txt
+app-desktop/
+.build-sdk/

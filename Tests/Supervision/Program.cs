@@ -8,6 +8,18 @@ try {
     var op = new Operation(Guid.NewGuid(),"pc","Local","operator","STANDARD USER",token,token,30,token,token,"unverified",Resources:token);
     var entry = new HistoryEntry(op,Guid.NewGuid(),Guid.NewGuid(),DateTimeOffset.UtcNow,Reason:token);
     void Check(string label, bool condition) { if (!condition) throw new Exception(label); Console.WriteLine("PASS " + label); }
+    var fingerprint=HostKeyPin.Fingerprint("fixture-key"u8.ToArray());
+    Check("SSH and SFTP accept an exact pinned host key",HostKeyPin.Matches(fingerprint,"fixture-key"u8.ToArray()));
+    Check("changed SSH host key refused",!HostKeyPin.Matches(fingerprint,"other"u8.ToArray()));
+    bool Reviewed(string key) => throw new Exception("Pinned key must never trigger first-use authorization");
+    var received="fixture-key"u8.ToArray();
+    var audited=new List<bool>();
+    Check("trusted pin follows audited accept path",HostKeyPin.Accept(fingerprint,received,Reviewed,(_,ok)=>audited.Add(ok),default));
+    Check("changed pin follows audited reject path",!HostKeyPin.Accept(fingerprint,"other"u8.ToArray(),Reviewed,(_,ok)=>audited.Add(ok),default));
+    Check("both pin decisions audited",audited.SequenceEqual(new[]{true,false}));
+    bool prompted=false;
+    Check("unknown host rejected by local operator",!HostKeyPin.Accept(null,received,_=>{prompted=true;return false;},(_,_)=>{},default) && prompted);
+    Check("cancelled approval cannot trust new host",!HostKeyPin.Accept(null,received,Reviewed,(_,_)=>{},new CancellationToken(true)));
     history.Save(entry);
     Check("pending approval interrupted before dispatch",history.Load().Single().Status == "interrupted_before_execution");
     entry = entry with { Status = "running",Started = DateTimeOffset.UtcNow };

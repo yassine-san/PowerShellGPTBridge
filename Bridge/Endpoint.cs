@@ -6,28 +6,28 @@ using ModelContextProtocol.Server;
 namespace PersistentBridge;
 internal sealed class Endpoint : IDisposable
 {
-    private readonly Window window; private readonly Audit audit; private readonly CancellationToken shutdown;
+    private readonly IOperatorView window; private readonly Audit audit; private readonly CancellationToken shutdown;
     private readonly SemaphoreSlim gate = new(1); private readonly SshSessions ssh;
     private Session session = new(); private DateSession? date = RestrictedMode ? new() : null;
     private CancellationTokenSource taskStop = new(); private Guid taskId = Guid.NewGuid();
     private volatile bool auditFault; private static bool RestrictedMode => IdentityInfo.Elevated && Environment.GetEnvironmentVariable("PSBRIDGE_ALLOW_ELEVATED_GET_DATE") == "1";
     private readonly bool restricted = RestrictedMode;
-    public Endpoint(Window window, Audit audit, CancellationToken shutdown) {
+    public Endpoint(IOperatorView window, Audit audit, CancellationToken shutdown) {
         this.window = window; this.audit = audit; this.shutdown = shutdown; ssh = new(window, audit);
-        window.TaskStopped += Stop; window.NewTask.Click += (_, _) => {
-            if (!gate.Wait(0)) { MessageBox.Show("Wait for the active operation to stop."); return; }
-            try { taskStop.Dispose(); taskStop = new(); taskId = Guid.NewGuid(); audit.Write("task_started", new { task_id = taskId }); window.State.Text = Summary; }
-            catch { auditFault = true; taskStop.Cancel(); window.State.Text = "Audit failure. Disconnect and inspect logs."; }
+        window.TaskStopped += Stop; window.NewTaskRequested += () => {
+            if (!gate.Wait(0)) { window.Notify("Wait for the active operation to stop."); return; }
+            try { taskStop.Dispose(); taskStop = new(); taskId = Guid.NewGuid(); audit.Write("task_started", new { task_id = taskId }); window.SetState(Summary); }
+            catch { auditFault = true; taskStop.Cancel(); window.SetState("Audit failure. Disconnect and inspect logs."); }
             finally { gate.Release(); }
         };
     }
     public string Summary => $"Session {session.Id}\n{(restricted ? "RESTRICTED elevated Get-Date only" : "Supervised general PowerShell / SSH")}\nTask {taskId}{(taskStop.IsCancellationRequested ? " STOPPED" : "")}";
     public void Started() => audit.Write("session_started", new { session.Id, session.Directory, restricted });
-    private void Stop() { taskStop.Cancel(); session.Dispose(); try { audit.Write("task_stopped", new { task_id = taskId }); } catch { auditFault = true; } window.State.Text = Summary + "\nLocal session stopped; Reset session before reuse."; }
+    private void Stop() { taskStop.Cancel(); session.Dispose(); try { audit.Write("task_stopped", new { task_id = taskId }); } catch { auditFault = true; } window.SetState(Summary + "\nLocal session stopped; Reset session before reuse."); }
     public void Reset() {
-        if (!gate.Wait(0)) { MessageBox.Show("Stop or finish the active request first."); return; }
+        if (!gate.Wait(0)) { window.Notify("Stop or finish the active request first."); return; }
         try { var old = session.Id; session.Dispose(); date?.Dispose(); session = new(); date = restricted ? new() : null;
-            audit.Write("session_reset", new { lost_session = old, new_session = session.Id }); window.State.Text = Summary; }
+            audit.Write("session_reset", new { lost_session = old, new_session = session.Id }); window.SetState(Summary); }
         finally { gate.Release(); }
     }
     public async Task Serve() {
@@ -50,6 +50,8 @@ internal sealed class Endpoint : IDisposable
         string? action, string host, int port, string localPath, string remotePath, CancellationToken caller)
     {
         command ??= ""; host ??= ""; description ??= ""; effects ??= ""; localPath ??= ""; remotePath ??= "";
+        bool validHost = action == null || (host.Length <= 253 && Uri.CheckHostName(host) != UriHostNameType.Unknown &&
+            !host.Any(c => char.IsControl(c) || char.GetUnicodeCategory(c) == UnicodeCategory.Format) && port is >= 1 and <= 65535);
         Guid id = Guid.NewGuid(); bool acquired = gate.Wait(0), executed = false;
         Guid currentTask = taskId;
         if (!acquired) {
@@ -58,13 +60,13 @@ internal sealed class Endpoint : IDisposable
                 var busyOp = new Operation(id, action == null ? Environment.MachineName : "SSH", action == null ? "Local PowerShell" : "SSH", "unassigned", "unassigned",
                     command.Length <= 32768 ? command : "(oversize request)", "unassigned", seconds, "Concurrent request", "", "Never dispatched", TaskId: currentTask);
                 window.Record(new(busyOp,currentTask,Guid.Empty,now,"busy",Ended:now,Result:new("busy",Error:"Another operation is active.")));
-                audit.Write("busy_request", new { id, task_id = currentTask, host, port, action, command = audit.Command(command) }); }
+                audit.Write("busy_request", new { id, task_id = currentTask, target = action == null ? "local" : "SSH", port, command = audit.Command(command) }); }
             catch { auditFault = true; }
             var busy = JsonSerializer.SerializeToElement(new { request_id = id, task_id = currentTask, status = "busy", approval = "none", executed = false, error = "Another request is active. No operation executed." });
             return new CallToolResult { StructuredContent = busy, IsError = true, Content = [new TextContentBlock { Text = busy.GetRawText() }] };
         }
         var decision = new Decision(false); var execution = new Execution("rejected"); var watch = new Stopwatch();
-        string target = action == null ? Environment.MachineName : ssh.Key(host, port);
+        string target = action == null ? Environment.MachineName : validHost ? ssh.Key(host, port) : "(invalid SSH target)";
         Guid resultSession = action == null ? session.Id : ssh.Id(target);
         string identity = action == null ? IdentityInfo.Name : ssh.Identity(target);
         string privilege = action == null ? (elevated ? "ELEVATED — ADMINISTRATOR (same Windows identity required)" : IdentityInfo.Privilege)
@@ -91,15 +93,16 @@ internal sealed class Endpoint : IDisposable
             if (command.Any(c => (char.IsControl(c) && c is not ('\r' or '\n' or '\t')) || char.GetUnicodeCategory(c) == UnicodeCategory.Format))
                 throw new ArgumentException("Command contains invisible control/format characters. Use explicit visible character construction instead.");
             if (command.Length > 32768 || operation.Length > 40000 || description.Length > 2000 || effects.Length > 4000 || seconds is < 1 or > 60) throw new ArgumentException("Invalid size or timeout (1–60 seconds).");
+            if (OperatingSystem.IsLinux() && elevated && !restricted) throw new InvalidOperationException("Local elevation is unavailable on Linux.");
             if (restricted && (action != null || command != "Get-Date" || elevated)) throw new InvalidOperationException("Elevated prototype remains Get-Date only. Use a standard Windows account for general execution; UAC-disabled administrators are not standard users.");
             Credential? credential = null; string? sudoPassword = null;
             if (action != null) {
-                if (string.IsNullOrWhiteSpace(host) || host.Length > 253 || host.Any(char.IsControl) || port is < 1 or > 65535) throw new ArgumentException("Invalid SSH target");
+                if (!validHost) throw new ArgumentException("Invalid SSH target");
                 if (action is not ("connect" or "execute" or "sudo" or "disconnect" or "upload" or "download")) throw new ArgumentException("Unknown SSH action");
                 if (action == "connect" && ssh.Connected(target)) throw new InvalidOperationException("Already connected. Submit the next command without reconnecting.");
                 if (action == "connect") { credential = await ssh.Credential(target, cancel.Token); if (credential == null) throw new InvalidOperationException("Local authentication cancelled"); identity = credential.Username; }
                 else if (!ssh.Connected(target)) throw new InvalidOperationException("Not connected; explicitly connect first.");
-                if (action == "sudo") { var local = await CredentialStore.Prompt(window, target, cancel.Token, sudo:true); if (local == null) throw new InvalidOperationException("sudo credential cancelled; nothing sent"); sudoPassword = local.Secret; }
+                if (action == "sudo") { var local = await window.RequestCredential(target, true, cancel.Token); if (local == null) throw new InvalidOperationException("sudo credential cancelled; nothing sent"); sudoPassword = local.Secret; }
                 if (action is "upload" or "download") { if (!Path.IsPathFullyQualified(localPath) || string.IsNullOrWhiteSpace(remotePath)) throw new ArgumentException("Transfers require an absolute local path and exact remote path"); }
             } else if (!read && !elevated && !session.Healthy) throw new InvalidOperationException("Session unhealthy; use local Reset session.");
             op = op with { Identity = identity };

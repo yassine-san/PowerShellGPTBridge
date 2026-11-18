@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 <PropertyGroup><TargetFramework>net8.0</TargetFramework><OutputType>Exe</OutputType><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><NoWarn>CA1416</NoWarn></PropertyGroup>
 <ItemGroup>
-<Compile Include="../../Bridge/Worker.cs"/><Compile Include="../../Bridge/Session.cs"/><Compile Include="../../Bridge/Job.cs"/><Compile Include="../../Bridge/Operation.cs"/><Compile Include="../../Bridge/IdentityInfo.cs"/>
-<PackageReference Include="Microsoft.PowerShell.SDK" Version="7.4.17"/>
+<Compile Include="../../Bridge/Worker.cs"/><Compile Include="../../Bridge/Session.cs"/><Compile Include="../../Bridge/Wire.cs"/><Compile Include="../../Bridge/Job.cs"/><Compile Include="../../Bridge/Operation.cs"/><Compile Include="../../Bridge/IdentityInfo.cs"/>
+<PackageReference Include="Microsoft.PowerShell.SDK" Version="7.4.22"/>
 </ItemGroup></Project>

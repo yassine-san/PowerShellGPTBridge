@@ -1,0 +1,1 @@
+Build in a separate directory. See docs/SETUP.md and docs/LINUX.md. Use a disposable standard-user desktop and test accounts. Include the target OS, architecture and exact tests run in each review. Exercise approval, rejection, expiry, desktop loss and host-key mismatch for security-sensitive changes. Keep credentials and operation history out of commits.

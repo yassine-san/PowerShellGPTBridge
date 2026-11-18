@@ -15,6 +15,9 @@ internal sealed class Audit
 
     public Audit()
     {
+#if LINUX_HOST
+        var root = LinuxOS.PrivateRoot();
+#else
         var sid = WindowsIdentity.GetCurrent().User ?? throw new InvalidOperationException("Missing user SID");
         var acl = new DirectorySecurity();
         acl.SetAccessRuleProtection(true, false);
@@ -26,6 +29,7 @@ internal sealed class Audit
         root.Create(acl);
         if (root.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new IOException("Unexpected audit directory link");
         root.SetAccessControl(acl);
+        #endif
         // Each launch creates a private new log, inheriting the protected directory ACL.
         path = Path.Combine(root.FullName, $"{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}.jsonl");
         using var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read);

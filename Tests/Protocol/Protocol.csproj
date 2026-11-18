@@ -1,4 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
 <PropertyGroup><TargetFramework>net8.0</TargetFramework><OutputType>Exe</OutputType><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup>
-<ItemGroup><Compile Include="../../Bridge/Endpoint.cs"/><Compile Include="../../Bridge/Operation.cs"/><Compile Include="../../Bridge/DateSession.cs"/>
-<PackageReference Include="Microsoft.PowerShell.SDK" Version="7.4.17"/><PackageReference Include="ModelContextProtocol.Core" Version="2.4.0"/></ItemGroup></Project>
+<ItemGroup><Compile Include="../../Bridge/IOperatorView.cs"/>
+    <Compile Include="../../Bridge/Endpoint.cs"/><Compile Include="../../Bridge/Operation.cs"/><Compile Include="../../Bridge/DateSession.cs"/>
+<PackageReference Include="Microsoft.PowerShell.SDK" Version="7.4.22"/><PackageReference Include="ModelContextProtocol.Core" Version="2.4.0"/></ItemGroup></Project>
