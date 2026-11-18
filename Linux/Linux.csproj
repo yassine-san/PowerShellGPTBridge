@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable><RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="../Bridge/IOperatorView.cs"/>
+    <Compile Include="../Bridge/IOperatorView.cs;../Bridge/ShellProfile.cs"/>
     <Compile Include="../Supervisor/*.cs"/>
     <Compile Include="../Bridge/Endpoint.cs;../Bridge/Worker.cs;../Bridge/Wire.cs;../Bridge/HostKeyPin.cs;../Bridge/SshSessions.cs;../Bridge/LimitedWrite.cs;../Bridge/DateSession.cs;../Bridge/Operation.cs;../Bridge/Audit.cs;../Bridge/History.cs"/>
     <PackageReference Include="Microsoft.PowerShell.SDK" Version="7.4.22"/>
