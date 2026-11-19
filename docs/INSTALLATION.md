@@ -123,7 +123,17 @@ Each command requires a fresh local approval. The bridge does not require exposi
   The desktop approval/operations UI should become available. If it does not, inspect the launcher error and prerequisites. Avoid killing an existing working bridge instance; only one instance for the same identity may be allowed.
 
 
-## UBUNTU 24.04 LTS x86-64 DESKTOP
+## LINUX WITH DOCKER (RECOMMENDED ON LINUX)
+
+On any Linux x86-64 desktop with a Wayland session and Docker, skip the Ubuntu steps below: nothing but Docker is installed on the host, and `./bridgectl` builds the image, downloads and checksum-verifies the tunnel client, asks for the runtime key at a hidden prompt and manages the container.
+
+    ./bridgectl doctor
+    ./bridgectl setup --tunnel-id tunnel_...
+    ./bridgectl start
+
+See [docs/DOCKER.md](DOCKER.md) for the commands, what runs where and the security notes (approved commands run inside the container, and the container shares your display). Then continue at STEP 11. Steps 4 to 10L apply only to the native Ubuntu route.
+
+## UBUNTU 24.04 LTS x86-64 DESKTOP (NATIVE)
 
 
 
@@ -210,7 +220,7 @@ Each command requires a fresh local approval. The bridge does not require exposi
 ### STEP 12 — Check discovered tools
 
   The plugin should expose these tools where permitted by your account/workspace:
-    execute_powershell
+    execute_powershell   (Windows)   or   execute_shell   (Linux)
     ssh_operation
   If no tools appear, verify tunnel connection, workspace association, plugin settings, and client output. Write-capable tool availability may depend on workspace policy.
 
@@ -222,19 +232,20 @@ Each command requires a fresh local approval. The bridge does not require exposi
 ### STEP 13 — Test one harmless local command
 
   In ChatGPT, ask:
-    "Use My PowerShell to execute exactly Get-Date."
-  On Linux, the bridge uses a PowerShell-based worker as well; this is not a Linux shell-command interface.
+    "Use My PowerShell to execute exactly Get-Date."   (Windows)
+    "Use the bridge to execute exactly: date"          (Linux)
+  On Linux the shell is your bash or zsh (PSBRIDGE_SHELL=powershell restores the PowerShell worker). The exact command `date` is the fixed READ operation.
   On the local desktop approval dialog, inspect request details and REJECT the first attempt. Confirm ChatGPT gets the rejection.
   Repeat the command and APPROVE it. Confirm ChatGPT shows a date/time, request ID, machine/identity, and that the operation is in local history.
   NOTE: Never approve an unexpected command or an identity/target you do not recognize.
 
 
-### STEP 14 — Test persistent PowerShell state
+### STEP 14 — Test persistent shell state
 
   Ask for one approved execution of:
-    $Demo = 123
+    $Demo = 123          (Windows PowerShell)      Demo=123          (Linux bash or zsh)
   Then in a SEPARATE approved request ask for:
-    $Demo
+    $Demo                                          echo $Demo
   Expected output: 123. If not, check session reset/restart status.
 
 
@@ -292,8 +303,8 @@ ChatGPT custom MCP help:
 [ ] Bridge launched as a normal desktop user
 [ ] Runtime key entered locally, not stored in Git
 [ ] Custom ChatGPT plugin linked to the correct tunnel
-[ ] execute_powershell is available
-[ ] Get-Date rejected once and then approved
+[ ] execute_powershell (Windows) or execute_shell (Linux) is available
+[ ] Get-Date (Windows) or date (Linux) rejected once and then approved
 [ ] Persistent $Demo test passed
 [ ] Any Linux GUI issues recorded separately before claiming fully verified support
 
