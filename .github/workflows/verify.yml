@@ -1,5 +1,13 @@
 name: Build and verify
-on: [push, pull_request, workflow_dispatch]
+# Pull requests only. A branch push plus its pull request used to run the whole workflow twice, and the
+# merge ran it a third time on main. Run it manually from the Actions tab when a run on main is needed.
+on:
+  pull_request:
+  workflow_dispatch:
+# A newer push to the same pull request supersedes the run in progress.
+concurrency:
+  group: verify-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 env:
