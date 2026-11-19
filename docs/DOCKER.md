@@ -27,7 +27,7 @@ Then connect the tunnel in ChatGPT as described in [SETUP.md](SETUP.md) and ask 
 | Command | What it does |
 |---|---|
 | `setup [--tunnel-id ID]` | Checks the host, builds the image, installs the pinned tunnel-client into a volume |
-| `build` | Rebuilds the runtime image |
+| `build` | Rebuilds the runtime image. `setup`, `start`, `ui-test` and `fixture` also rebuild it automatically when the sources changed since it was built (for example after `git pull`) |
 | `test` | Builds the `test` target without cache, then launches the GUI under Xvfb in a real container run |
 | `start [--tunnel-id ID]` | Starts the container, delivers the key, waits for readiness, detects a rejected key |
 | `stop`, `restart` | Graceful stop (15 s) and removal |
@@ -35,9 +35,14 @@ Then connect the tunnel in ChatGPT as described in [SETUP.md](SETUP.md) and ask 
 | `logs [-f]` | Container logs |
 | `ui-test`, `fixture` | Approval window test, synthetic-data UI preview |
 | `shell` | Shell in the running container (or a fresh one) |
-| `doctor` | Diagnoses the host |
+| `doctor` | Diagnoses the host, including a stale image |
+| `key [save\|forget\|status]` | Optionally remember the runtime key (see below). Off by default |
 | `clean [--all] [--yes]` | Removes images. `--all` also deletes volumes (host-key pins, audit history) and the saved tunnel id, after confirmation |
 | `os` | Prints the detected OS. `bridgectl` only takes the Docker path on Linux and points Windows users at `Start-Bridge.ps1` |
+
+## The runtime key
+
+`start` asks for the key at a hidden prompt each time and keeps nothing. If that is too tedious, `./bridgectl key save` stores it once in `~/.config/psbridge/runtime-key` (mode 600) and `start` then uses it without a prompt; `./bridgectl key forget` removes it. The file is plaintext at rest and readable by every process that runs as you, so this is opt-in. The key only carries Tunnels Read + Use, and approved commands run in the container, which cannot see this file. Revoke the key in Platform if it ever leaks. `start` refuses a key file that is not mode 600.
 
 ## What runs where
 
@@ -62,6 +67,9 @@ Both windows are created undecorated and the approval window asks to be always o
 The rule syntax differs between compositor versions, so check your compositor's documentation. For Hyprland the rule should float the window, center it and pin it; this repository has not verified an exact line for every version.
 
 ## Troubleshooting
+
+- **The bridge stopped by itself.** Closing the *Operations* window means Disconnect: the bridge exits and the tunnel client stops with it. Minimise the window instead. Closing the *Approval* window only rejects the pending request.
+- **ChatGPT still shows `execute_powershell` and `Get-Date` on Linux.** The container runs an image built before the native shell backend. `./bridgectl build` (or `start`) refreshes it; then disconnect and reconnect the plugin in ChatGPT so it reads the new tool list (`execute_shell`).
 
 - **`doctor` says only X11 was found.** See the security note above, or use a Wayland session.
 - **Window titles do not match in tools such as `xdotool`.** Set a UTF-8 locale; the images already do (`LANG=C.UTF-8`).
