@@ -17,6 +17,7 @@ readonly CLIENT_VERSION_DEFAULT="v0.0.21"
 readonly CLIENT_SHA256_DEFAULT="9e91a539e3ae1c436d499f216a1d7514b3c86cc7779032f41b2a05821d74b03a"
 readonly CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/psbridge"
 readonly CONFIG_FILE="$CONFIG_DIR/bridgectl.env"
+readonly KEY_FILE="$CONFIG_DIR/runtime-key"
 
 if [[ -t 1 ]]; then B=$'\e[1m'; G=$'\e[32m'; R=$'\e[31m'; Y=$'\e[33m'; N=$'\e[0m'; else B=; G=; R=; Y=; N=; fi
 info() { printf '%s\n' "$*"; }
@@ -194,6 +195,7 @@ cmd_doctor() {
   if ! image_exists; then warn "image $IMAGE missing (run: ./bridgectl build)"
   elif image_current; then ok "image $IMAGE is current"
   else warn "image $IMAGE is older than the sources (run: ./bridgectl build; start and setup also rebuild it)"; fi
+  if [[ -f $KEY_FILE ]]; then ok "runtime key saved on this machine (./bridgectl key forget removes it)"; else ok "no saved runtime key (start asks for it)"; fi
   if image_exists && volume_managed "$TOOLS_VOLUME" && \
      docker run --rm --pull=never -v "$TOOLS_VOLUME:/t:ro" --entrypoint test "$IMAGE" -x /t/tunnel-client 2>/dev/null; then ok "tunnel-client installed"
   else warn "tunnel-client not installed (run: ./bridgectl setup)"; fi
@@ -297,9 +299,15 @@ cmd_start() {
   require_display
   warn "Approved commands run inside the container, but the container shares your display. Read every request before approving."
 
-  [[ -t 0 ]] || die "Start from an interactive terminal: the runtime key is entered at a hidden prompt."
   local key uid; uid=$(id -u)
-  read -r -s -p "Restricted Platform runtime key (Tunnels Read + Use): " key; echo
+  if [[ -f $KEY_FILE ]]; then
+    [[ $(stat -c %a "$KEY_FILE") == 600 ]] || die "$KEY_FILE must have mode 600. Fix it or run ./bridgectl key forget."
+    key=$(<"$KEY_FILE")
+    info "Using the saved runtime key (./bridgectl key forget removes it)."
+  else
+    [[ -t 0 ]] || die "Start from an interactive terminal (the key is entered at a hidden prompt), or save it once with ./bridgectl key save."
+    read -r -s -p "Restricted Platform runtime key (Tunnels Read + Use): " key; echo
+  fi
   [[ -n $key ]] || die "Key required."
   ensure_volume "$STATE_VOLUME"
   # The key never enters the container config, a command line or the image: it is piped over `docker exec`
@@ -360,6 +368,24 @@ cmd_status() {
   fi
 }
 
+# Optional convenience: keep the restricted runtime key in a 0600 file under the config directory so
+# `start` does not ask each time. It is plaintext at rest and readable by every process running as you,
+# which is why it is opt-in. The key only has Tunnels Read + Use. Revoke it in Platform if it ever leaks.
+cmd_key() {
+  case ${1:-status} in
+    save)
+      [[ -t 0 ]] || die "Run this from an interactive terminal."
+      local key; read -r -s -p "Restricted Platform runtime key to save (Tunnels Read + Use): " key; echo
+      [[ $key =~ ^[[:print:]]+$ ]] || die "That does not look like a key (empty or contains control characters)."
+      ( umask 077; mkdir -p "$CONFIG_DIR"; printf '%s' "$key" > "$KEY_FILE.tmp"; mv "$KEY_FILE.tmp" "$KEY_FILE" )
+      key=; ok "saved to $KEY_FILE (mode 600). start will use it. Remove it with: ./bridgectl key forget" ;;
+    forget) rm -f -- "$KEY_FILE"; ok "saved key removed" ;;
+    status)
+      if [[ -f $KEY_FILE ]]; then info "saved key: yes ($KEY_FILE, mode $(stat -c %a "$KEY_FILE"))"; else info "saved key: no (start asks for it)"; fi ;;
+    *) die "usage: bridgectl key [save|forget|status]" ;;
+  esac
+}
+
 cmd_logs() { need_docker; [[ $(container_state) != absent ]] || die "no container"; docker logs "$@" "$CONTAINER"; }
 cmd_shell() { need_docker; if [[ $(container_state) == running ]]; then docker exec -it "$CONTAINER" bash -l; else run_container --rm -it -- shell; fi; }
 cmd_ui_test() { require_linux; need_docker; ensure_image; run_container --rm -it -- ui-test; }
@@ -394,13 +420,14 @@ ${B}bridgectl${N} - PowerShellGPTBridge Docker manager
                                                      check, build image, install the pinned tunnel-client
   build                                              (re)build the runtime image
   test                                               run every automated suite in a clean container
-  start [--tunnel-id ID]                             start the bridge (rebuilds a stale image; prompts for the runtime key)
+  start [--tunnel-id ID]                             start the bridge (rebuilds a stale image; prompts for the key unless saved)
   stop | restart                                     stop (remove) / restart the container
   status                                             container, processes and tunnel health
   logs [-f]                                          container logs
   ui-test | fixture                                  approval window test / synthetic data UI preview
   shell                                              shell in the running (or a fresh) container
   doctor                                             diagnose the host (also reports a stale image)
+  key [save|forget|status]                           optionally remember the runtime key (0600 file, off by default)
   clean [--all] [--yes]                              remove images (--all: also volumes and config)
   os                                                 print the detected operating system
 
@@ -414,7 +441,7 @@ main() {
     setup) cmd_setup "$@" ;; build) cmd_build ;; test) cmd_test ;; start) cmd_start "$@" ;;
     stop) cmd_stop ;; restart) cmd_restart "$@" ;; status) cmd_status ;; logs) cmd_logs "$@" ;;
     shell) cmd_shell ;; ui-test) cmd_ui_test ;; fixture) cmd_fixture ;; doctor) cmd_doctor ;;
-    clean) cmd_clean "$@" ;; os) cmd_os ;; help|-h|--help) usage ;;
+    clean) cmd_clean "$@" ;; os) cmd_os ;; key) cmd_key "$@" ;; help|-h|--help) usage ;;
     *) usage >&2; exit 2 ;;
   esac
 }
