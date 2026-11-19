@@ -46,7 +46,7 @@ RUN --mount=type=cache,target=/root/.nuget/packages \
 
 # ---------------------------------------------------------------- test
 FROM build AS test
-RUN apt-get update && apt-get install -y --no-install-recommends xvfb xdotool \
+RUN apt-get update && apt-get install -y --no-install-recommends xvfb xdotool zsh \
     && rm -rf /var/lib/apt/lists/*
 # Tests must not run as root: the bridge refuses effective UID 0.
 RUN useradd -m -u 1001 tester && install -d -o tester -g tester /home/tester/.nuget /home/tester/.nuget/packages && chown -R tester:tester /src

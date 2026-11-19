@@ -23,6 +23,7 @@ flowchart TD
 |---|---|---|
 | Windows x64 | In PowerShell 7, run `.\Start-Bridge.ps1 -Desktop -TunnelId $TunnelId -TunnelClient $TunnelClient` | [Setup guide](docs/SETUP.md) |
 | Ubuntu 24.04 LTS x64 desktop | Run `./Start-Linux.sh "$TUNNEL_ID" "$TUNNEL_CLIENT"` | [Linux guide](docs/LINUX.md) |
+| Any Linux x64 desktop with Wayland and Docker | `./bridgectl setup --tunnel-id tunnel_…` then `./bridgectl start` | [Docker guide](docs/DOCKER.md) |
 
 Use a standard desktop account. Install the x64 .NET 8 runtime, Windows Desktop Runtime on Windows, and the official tunnel client. The Tauri frontend uses WebView2 on Windows and WebKitGTK 4.1 on Linux. An extracted binary distribution needs no Rust, Node or Visual C++ compiler on the operator’s laptop. A source checkout requires a separate build step.
 
