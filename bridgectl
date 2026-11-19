@@ -55,6 +55,25 @@ need_docker() {
 }
 
 image_exists() { docker image inspect "$IMAGE" >/dev/null 2>&1; }
+
+# Fingerprint of the tracked sources plus uncommitted edits. The image carries the value it was built from,
+# so a stale image (built before a pull or an edit) is noticed instead of silently running old code.
+source_hash() {
+  if command -v git >/dev/null && git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+    { git -C "$ROOT" ls-files -s; git -C "$ROOT" diff HEAD; } | sha256sum | cut -c1-16
+  else
+    echo unknown
+  fi
+}
+image_source() { docker image inspect -f '{{index .Config.Labels "psbridge.source"}}' "$IMAGE" 2>/dev/null || true; }
+image_current() { local want; want=$(source_hash); [[ $want == unknown || $(image_source) == "$want" ]]; }
+
+# Build when the image is missing or older than the source tree.
+ensure_image() {
+  if ! image_exists; then cmd_build
+  elif ! image_current; then warn "Image $IMAGE was built from older sources ($(image_source | cut -c1-8)); rebuilding."; cmd_build
+  fi
+}
 container_state() {
   local s
   s=$(docker container inspect -f '{{.State.Status}}' "$CONTAINER" 2>/dev/null) || s=absent
@@ -172,7 +191,9 @@ cmd_doctor() {
   elif [[ -n ${DISPLAY:-} ]]; then warn "only X11 found: refused unless PSBRIDGE_ALLOW_X11=1 (X11 lets containers click Approve)"; fail=1
   else warn "no graphical session: the approval window cannot be shown"; fail=1; fi
   if [[ $(id -u) -ne 0 ]]; then ok "running as non-root (uid $(id -u))"; else warn "running as root"; fail=1; fi
-  if image_exists; then ok "image $IMAGE present"; else warn "image $IMAGE missing (run: ./bridgectl build)"; fi
+  if ! image_exists; then warn "image $IMAGE missing (run: ./bridgectl build)"
+  elif image_current; then ok "image $IMAGE is current"
+  else warn "image $IMAGE is older than the sources (run: ./bridgectl build; start and setup also rebuild it)"; fi
   if image_exists && volume_managed "$TOOLS_VOLUME" && \
      docker run --rm --pull=never -v "$TOOLS_VOLUME:/t:ro" --entrypoint test "$IMAGE" -x /t/tunnel-client 2>/dev/null; then ok "tunnel-client installed"
   else warn "tunnel-client not installed (run: ./bridgectl setup)"; fi
@@ -186,7 +207,8 @@ cmd_doctor() {
 cmd_build() {
   require_linux; need_docker
   info "Building $IMAGE (first build downloads toolchains; later builds are cached)…"
-  docker build --target runtime --build-arg "APP_UID=$(id -u)" --build-arg "APP_GID=$(id -g)" -t "$IMAGE" "$ROOT"
+  docker build --target runtime --build-arg "APP_UID=$(id -u)" --build-arg "APP_GID=$(id -g)" \
+    --label "psbridge.source=$(source_hash)" -t "$IMAGE" "$ROOT"
   ok "built $IMAGE"
 }
 
@@ -225,7 +247,7 @@ cmd_setup() {
   [[ -n $sha ]] || die "A non-default client version needs --client-sha256 <hash> (from the release page; the runtime key is entrusted to this binary)."
   [[ $sha =~ ^[0-9a-f]{64}$ ]] || die "--client-sha256 must be 64 lowercase hex characters"
   if [[ -n $id ]]; then valid_tunnel_id "$id" || die "$TUNNEL_ID_HINT"; save_tunnel_id "$id"; ok "tunnel id saved to $CONFIG_FILE"; fi
-  image_exists || cmd_build
+  ensure_image
   install_client "$version" "$sha"
   ok "setup complete. Next: ./bridgectl start"
 }
@@ -268,14 +290,14 @@ cmd_start() {
   [[ -n $id ]] || die "No tunnel id. Run ./bridgectl setup --tunnel-id tunnel_… first."
   valid_tunnel_id "$id" || die "$TUNNEL_ID_HINT"
   # Every precondition is checked before the key is requested.
-  image_exists || die "Image missing. Run ./bridgectl setup."
+  ensure_image
   volume_managed "$TOOLS_VOLUME" || die "tunnel-client not installed. Run ./bridgectl setup."
   require_ours_or_absent
   [[ $(container_state) == absent ]] || die "Already present ($(container_state)). Use ./bridgectl stop first."
   require_display
-  [[ -t 0 ]] || die "Start from an interactive terminal: the runtime key is entered at a hidden prompt."
   warn "Approved commands run inside the container, but the container shares your display. Read every request before approving."
 
+  [[ -t 0 ]] || die "Start from an interactive terminal: the runtime key is entered at a hidden prompt."
   local key uid; uid=$(id -u)
   read -r -s -p "Restricted Platform runtime key (Tunnels Read + Use): " key; echo
   [[ -n $key ]] || die "Key required."
@@ -340,8 +362,8 @@ cmd_status() {
 
 cmd_logs() { need_docker; [[ $(container_state) != absent ]] || die "no container"; docker logs "$@" "$CONTAINER"; }
 cmd_shell() { need_docker; if [[ $(container_state) == running ]]; then docker exec -it "$CONTAINER" bash -l; else run_container --rm -it -- shell; fi; }
-cmd_ui_test() { require_linux; need_docker; image_exists || cmd_build; run_container --rm -it -- ui-test; }
-cmd_fixture() { require_linux; need_docker; image_exists || cmd_build; run_container --rm -- fixture; }
+cmd_ui_test() { require_linux; need_docker; ensure_image; run_container --rm -it -- ui-test; }
+cmd_fixture() { require_linux; need_docker; ensure_image; run_container --rm -- fixture; }
 
 cmd_clean() {
   need_docker
@@ -372,13 +394,13 @@ ${B}bridgectl${N} - PowerShellGPTBridge Docker manager
                                                      check, build image, install the pinned tunnel-client
   build                                              (re)build the runtime image
   test                                               run every automated suite in a clean container
-  start [--tunnel-id ID]                             start the bridge (prompts for the runtime key)
+  start [--tunnel-id ID]                             start the bridge (rebuilds a stale image; prompts for the runtime key)
   stop | restart                                     stop (remove) / restart the container
   status                                             container, processes and tunnel health
   logs [-f]                                          container logs
   ui-test | fixture                                  approval window test / synthetic data UI preview
   shell                                              shell in the running (or a fresh) container
-  doctor                                             diagnose the host
+  doctor                                             diagnose the host (also reports a stale image)
   clean [--all] [--yes]                              remove images (--all: also volumes and config)
   os                                                 print the detected operating system
 
