@@ -29,6 +29,9 @@ if [[ ${1:-suites} == gui ]]; then gui_smoke; printf '\nGUI SMOKE PASSED\n'; exi
 step "Supervision (history, evidence, enforcement)"
 dotnet run --project Tests/Supervision
 
+step "Shell backends (profile detection, bash and zsh sessions)"
+dotnet run --project Tests/Shell
+
 step "Session (real persistent worker)"
 dotnet build Tests/Session -v quiet
 PSModulePath="$PWD/Tests/Session/bin/Debug/net8.0/runtimes/$rid/lib/net8.0/Modules" \

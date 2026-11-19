@@ -1,4 +1,5 @@
 using PersistentBridge;
+Environment.SetEnvironmentVariable(ShellProfile.OverrideVariable,"powershell"); // this suite covers the PowerShell worker backend
 if(args.FirstOrDefault() is "--worker" or "--broker")return Worker.Entry(args);
 using var session=new Session();
 async Task Check(string name,string script,Func<Execution,bool> verify,int seconds=10) {

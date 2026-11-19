@@ -41,6 +41,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           dotnet run --project Tests/Supervision
+          if ($IsLinux) { dotnet run --project Tests/Shell }
           dotnet build Tests/Session
           $rid = if ($IsWindows) {'win'} else {'unix'}
           $env:PSModulePath = Join-Path $PWD "Tests/Session/bin/Debug/net8.0/runtimes/$rid/lib/net8.0/Modules"
