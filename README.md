@@ -48,6 +48,8 @@ Run the bundled `bridge-supervisor --fixture` (Windows: `app-desktop\bridge-supe
 
 Windows compatibility build: `.\Build.ps1`. Windows Tauri build on a provisioned build host: `.\Build-Desktop.ps1`. Ubuntu Tauri build: `./Build-Linux.sh`. Build into a new directory and retain the existing installation for rollback. To revert, disconnect the candidate and invoke the old launcher. Each process change ends transient sessions.
 
+CI (`.github/workflows/verify.yml`) runs once per pull request, builds both platforms, runs all suites and captures the Linux windows. It is not repeated after a merge; start it by hand from the Actions tab if a run on `main` is needed.
+
 [Security model and reporting](SECURITY.md) · [Audit and test evidence](docs/RELEASE-REVIEW.md) · [Contributing](CONTRIBUTING.md) · [MIT license](LICENSE)
 
 Next release gates are native desktop/tunnel acceptance on both platforms, a real SSH/SFTP round trip, full process-tree performance measurements and migration to a supported .NET/PowerShell runtime pair. Detached jobs are outside this release.
