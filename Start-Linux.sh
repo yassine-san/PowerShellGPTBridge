@@ -22,8 +22,15 @@ names=("HOME","USER","LOGNAME","LANG","LC_ALL","DISPLAY","WAYLAND_DISPLAY","XAUT
 env={k:os.environ[k] for k in names if os.environ.get(k)}
 env["PATH"]="/usr/local/bin:/usr/bin:/bin"
 env["PSBRIDGE_TUNNEL_EXE"]=sys.argv[1]
-with open("/dev/tty","r+") as tty:
-    key=getpass.getpass("Restricted Platform runtime key: ",stream=tty)
+# A non-interactive launcher (the Docker entrypoint) hands the key over in a private file that is read once
+# and deleted. Only this explicit variable is honoured: an ambient CONTROL_PLANE_API_KEY is never picked up.
+key_file=os.environ.get("PSBRIDGE_KEY_FILE")
+if key_file:
+    with open(key_file) as f: key=f.read().strip()
+    os.unlink(key_file)
+else:
+    with open("/dev/tty","r+") as tty:
+        key=getpass.getpass("Restricted Platform runtime key: ",stream=tty)
 if not key:raise SystemExit("Key required")
 env["CONTROL_PLANE_API_KEY"]=key
 os.execve(sys.argv[1],[sys.argv[1],"run","--config",sys.argv[2]],env)
