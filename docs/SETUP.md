@@ -20,6 +20,8 @@ Start the corresponding launcher in an interactive desktop session. On Windows s
 .\Start-Bridge.ps1 -Desktop -TunnelId $TunnelId -TunnelClient $TunnelClient
 ~~~
 
+On Linux with Docker use `./bridgectl start` instead (see [DOCKER.md](DOCKER.md)).
+
 In ChatGPT open Plugins, choose the plus button and Add custom MCP server, select Tunnel and the same identifier. Configure the workspace-required authentication, review the permissions and create the plugin. The restricted runtime key is separate from ChatGPT app authentication. Reuse existing resources wherever possible. If the tunnel is absent, check workspace association, the operator’s Read + Use permission and account policy. Use the official client’s doctor and readiness checks for transport problems.
 
 ## 4. Validate a conversation
